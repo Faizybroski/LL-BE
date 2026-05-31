@@ -38,14 +38,12 @@ export function createApp(): express.Application {
   // Set TRUST_PROXY=1 in production (one hop: Vercel edge → function).
   app.set('trust proxy', env.TRUST_PROXY)
 
-  // ── Preflight (OPTIONS) — must come before helmet & rate-limiter ──────────
-  // Responds immediately with 204 + CORS headers for allowed origins so the
-  // browser can proceed to the actual request without hitting other middleware.
-  app.options('*', cors(corsOptions))
-
   // ── Security ──────────────────────────────────────────────────────────────
-  app.use(helmet())
+  // cors must come before helmet so CORS headers are set on preflight responses.
+  // When cors sees an OPTIONS request it responds with 204 immediately and does
+  // NOT call next() — so OPTIONS never reaches the rate-limiter.
   app.use(cors(corsOptions))
+  app.use(helmet())
 
   // ── Performance ───────────────────────────────────────────────────────────
   app.use(compression())
