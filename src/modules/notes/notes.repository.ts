@@ -18,6 +18,16 @@ export async function create(data: Record<string, unknown>) {
   return supabase.from(TABLE).insert(data).select('*, profiles ( id, full_name )').single()
 }
 
+export async function update(id: string, data: Record<string, unknown>) {
+  return supabase
+    .from(TABLE)
+    .update(data)
+    .eq('note_id', id)
+    .is('deleted_at', null)
+    .select('*, profiles ( id, full_name )')
+    .single()
+}
+
 export async function deleteById(id: string, userId: string) {
   return supabase.from(TABLE).delete({ count: 'exact' }).eq('note_id', id).eq('created_by', userId)
 }
