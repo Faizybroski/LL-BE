@@ -47,6 +47,7 @@ export async function create(req: Request, res: Response, next: NextFunction): P
     const shipment = await shipmentsService.createShipment(
       req.body as CreateShipmentDto,
       req.user!.id,
+      req.user!.role,
     )
     created(res, shipment, 'Shipment created')
   } catch (err) {

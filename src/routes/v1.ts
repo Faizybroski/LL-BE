@@ -6,6 +6,8 @@ import { shipmentsRouter } from '../modules/shipments/shipments.routes'
 import { notesRouter } from '../modules/notes/notes.routes'
 import { notificationsRouter } from '../modules/notifications/notifications.routes'
 import { dashboardRouter } from '../modules/dashboard/dashboard.routes'
+import { quotationsRouter } from '../modules/quotations/quotations.routes'
+import { invoicesRouter } from '../modules/invoices/invoices.routes'
 
 export const v1Router = Router()
 
@@ -16,3 +18,5 @@ v1Router.use('/shipments',     shipmentsRouter)
 v1Router.use('/notes',         notesRouter)
 v1Router.use('/notifications', notificationsRouter)
 v1Router.use('/dashboard',     dashboardRouter)
+v1Router.use('/quotations',    quotationsRouter)
+v1Router.use('/invoices',      invoicesRouter)

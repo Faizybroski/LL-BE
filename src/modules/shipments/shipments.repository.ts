@@ -35,9 +35,11 @@ const LIST_SELECT = `
   special_instructions,
   reference_number,
   created_by,
+  created_by_role,
   created_at,
   updated_at,
-  accounts ( account_id, account_name, account_code )
+  accounts ( account_id, account_name, account_code ),
+  profiles!created_by ( id, full_name, role )
 `
 
 // DETAIL_SELECT: full projection for single-record fetch.
@@ -73,9 +75,11 @@ const DETAIL_SELECT = `
   special_instructions,
   reference_number,
   created_by,
+  created_by_role,
   created_at,
   updated_at,
-  accounts ( account_id, account_name, account_code, contact_name, contact_email )
+  accounts ( account_id, account_name, account_code, contact_name, contact_email ),
+  profiles!created_by ( id, full_name, role )
 `
 
 // ── Shipments ─────────────────────────────────────────────────────────────────

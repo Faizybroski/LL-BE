@@ -7,9 +7,7 @@ export async function listNotes(query: ListNotesQuery, callerRole: string) {
     throw AppError.forbidden('Only administrators can view shipper notes')
   }
   const { data, count, error } = await notesRepo.findAll(query)
-  if (error) {
-    console.log(error)
-    throw AppError.internal('Failed to fetch notes')}
+  if (error) throw AppError.internal('Failed to fetch notes')
   return { notes: data ?? [], total: count ?? 0 }
 }
 
@@ -28,7 +26,12 @@ export async function createNote(dto: CreateNoteDto, createdBy: string, callerRo
   return data
 }
 
-export async function updateNote(id: string, dto: UpdateNoteDto, updatedBy: string, isAdmin: boolean) {
+export async function updateNote(
+  id: string,
+  dto: UpdateNoteDto,
+  updatedBy: string,
+  isAdmin: boolean,
+) {
   if (!isAdmin) throw AppError.forbidden('Only administrators can edit notes')
   const { data, error } = await notesRepo.update(id, {
     content: dto.content,

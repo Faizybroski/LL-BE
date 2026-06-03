@@ -19,7 +19,11 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
 
 export async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const note = await notesService.createNote(req.body as CreateNoteDto, req.user!.id, req.user!.role)
+    const note = await notesService.createNote(
+      req.body as CreateNoteDto,
+      req.user!.id,
+      req.user!.role,
+    )
     created(res, note, 'Note added')
   } catch (err) {
     next(err)
@@ -42,7 +46,11 @@ export async function update(req: Request, res: Response, next: NextFunction): P
 
 export async function remove(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const note = await notesService.deleteNote(param(req, 'id'), req.user!.id, req.user!.role === 'admin')
+    const note = await notesService.deleteNote(
+      param(req, 'id'),
+      req.user!.id,
+      req.user!.role === 'admin',
+    )
     ok(res, note, 'Note deleted')
   } catch (err) {
     next(err)

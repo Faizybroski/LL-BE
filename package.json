@@ -20,6 +20,7 @@
   "type": "commonjs",
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",
+    "@types/pdfkit": "^0.17.6",
     "@upstash/redis": "^1.38.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.76.6",
@@ -32,6 +33,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "papaparse": "^5.5.3",
+    "pdfkit": "^0.18.0",
     "stripe": "^22.1.1",
     "typesense": "^3.0.6",
     "winston": "^3.19.0",

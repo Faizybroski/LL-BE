@@ -96,10 +96,23 @@ export async function getShipment(
 }
 
 // ── Create ────────────────────────────────────────────────────────────────────
-export async function createShipment(dto: CreateShipmentDto, createdBy: string) {
-  // Resolve shipper profile → account (same path as assignToShipper)
+export async function createShipment(
+  dto:         CreateShipmentDto,
+  createdBy:   string,
+  creatorRole: 'admin' | 'shipper',
+) {
   let resolvedAccountId: string | null = null
-  if (dto.shipperId) {
+
+  if (creatorRole === 'shipper') {
+    // Shipper creates load → auto-assign to themselves (look up their account)
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('account_id')
+      .eq('id', createdBy)
+      .single()
+    resolvedAccountId = profile?.account_id ?? null
+  } else if (dto.shipperId) {
+    // Admin explicitly assigns to a shipper
     const { data: profile, error: profileErr } = await supabase
       .from('profiles')
       .select('account_id')
@@ -111,8 +124,9 @@ export async function createShipment(dto: CreateShipmentDto, createdBy: string) 
   }
 
   const { data, error } = await shipmentsRepo.create({
-    shipment_type: dto.shipmentType,
-    account_id:    resolvedAccountId,
+    shipment_type:    dto.shipmentType,
+    account_id:       resolvedAccountId,
+    created_by_role:  creatorRole,
 
     origin_address:  dto.originAddress,
     origin_city:     dto.originCity,
@@ -146,7 +160,8 @@ export async function createShipment(dto: CreateShipmentDto, createdBy: string) 
     created_by: createdBy,
   })
 
-  if (error) throw AppError.internal('Failed to create shipment')
+  if (error) {console.error(error)
+    throw AppError.internal('Failed to create shipment')}
   return data
 }
 
@@ -266,10 +281,9 @@ export async function updateStatus(
 }
 
 // ── Assign to shipper ─────────────────────────────────────────────────────────
-// Admin-only. Shipment must be 'confirmed'. Accepts the shipper's USER id,
-// looks up their account_id, then sets it on the shipment and advances status
-// to 'assigned'. If the load was shipper-created (already has an account_id)
-// the account is preserved; only the status advances.
+// Admin-only. Shipment must be 'confirmed' and not shipper-owned. Accepts the
+// shipper's USER id, looks up their account_id, sets it on the shipment and
+// advances status to 'assigned'.
 export async function assignToShipper(
   shipmentId: string,
   dto:        AssignShipmentDto,
@@ -280,6 +294,12 @@ export async function assignToShipper(
 
   const shipment      = cast<ShipmentRow>(raw)
   const currentStatus = shipment.status as ShipmentStatus
+
+  if (shipment.created_by_role === 'shipper') {
+    throw AppError.forbidden(
+      'This load was created by a shipper and its assignment is permanently locked. Reassignment is not permitted.',
+    )
+  }
 
   if (currentStatus !== 'confirmed') {
     throw AppError.unprocessable(
@@ -308,8 +328,7 @@ export async function assignToShipper(
   if (accountErr || !account) throw AppError.notFound('Shipper account')
   if (!account.is_active) throw AppError.unprocessable('Cannot assign to an inactive shipper account')
 
-  // If shipper-created (account already set), preserve the original account.
-  const targetAccountId = (shipment.account_id as string | null) ?? profile.account_id
+  const targetAccountId = profile.account_id
 
   const { data, error } = await shipmentsRepo.updateById(shipmentId, {
     account_id: targetAccountId,
