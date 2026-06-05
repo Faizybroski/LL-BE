@@ -10,7 +10,7 @@ import {
 import * as authRepo from './auth.repository'
 import { logger } from '../../lib/logger'
 import type { LoginDto, RefreshDto, LogoutDto, RegisterDto, ChangePasswordDto } from './auth.schema'
-import type { UserRole } from '../../middleware/auth.middleware'
+import type { UserRole, CompanyRole } from '../../middleware/auth.middleware'
 
 // Converts JWT duration strings ("15m", "1h", "30s") to seconds for the API response.
 function parseExpiry(s: string): number {
@@ -29,14 +29,15 @@ function parseExpiry(s: string): number {
 // ── Shared token-pair builder ─────────────────────────────────────────────────
 // Extracted so login + refresh produce identically-shaped responses.
 async function issueTokenPair(
-  userId:    string,
-  email:     string,
-  role:      UserRole,
-  accountId: string | null,
-  context:   { ipAddress?: string; userAgent?: string },
+  userId:      string,
+  email:       string,
+  role:        UserRole,
+  accountId:   string | null,
+  companyRole: CompanyRole,
+  context:     { ipAddress?: string; userAgent?: string },
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
   // 1. Sign a short-lived JWT (15 min by default)
-  const accessToken = signAccessToken({ sub: userId, email, role, accountId })
+  const accessToken = signAccessToken({ sub: userId, email, role, accountId, companyRole })
 
   // 2. Generate an opaque refresh token and store its SHA-256 hash
   const { rawToken, tokenHash } = generateRefreshToken()
@@ -87,7 +88,7 @@ export async function login(
   // and should not be extended with application-level attributes.
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role, full_name, is_active, account_id')
+    .select('role, company_role, full_name, avatar_url, is_active, account_id')
     .eq('id', data.user.id)
     .single()
 
@@ -100,16 +101,19 @@ export async function login(
     throw AppError.forbidden('Account has been deactivated')
   }
 
-  const tokens = await issueTokenPair(data.user.id, data.user.email!, profile.role as UserRole, profile.account_id, context)
+  const companyRole = (profile.company_role ?? null) as CompanyRole
+  const tokens = await issueTokenPair(data.user.id, data.user.email!, profile.role as UserRole, profile.account_id, companyRole, context)
 
   return {
     ...tokens,
     user: {
-      id: data.user.id,
-      email: data.user.email,
-      role: profile.role,
-      fullName: profile.full_name,
-      accountId: profile.account_id,
+      id:          data.user.id,
+      email:       data.user.email,
+      role:        profile.role,
+      companyRole: profile.company_role ?? null,
+      fullName:    profile.full_name,
+      avatarUrl:   profile.avatar_url ?? null,
+      accountId:   profile.account_id,
     },
   }
 }
@@ -168,7 +172,7 @@ export async function refresh(
   // Fetch fresh user data — role may have changed since last login
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role, is_active, account_id')
+    .select('role, company_role, is_active, account_id')
     .eq('id', anyToken.user_id)
     .single()
 
@@ -178,7 +182,8 @@ export async function refresh(
   const { data: authUser } = await supabase.auth.admin.getUserById(anyToken.user_id)
   const email = authUser.user?.email ?? ''
 
-  return issueTokenPair(anyToken.user_id, email, profile.role as UserRole, profile.account_id, context)
+  const companyRole = (profile.company_role ?? null) as CompanyRole
+  return issueTokenPair(anyToken.user_id, email, profile.role as UserRole, profile.account_id, companyRole, context)
 }
 
 // ── POST /auth/logout ──────────────────────────────────────────────────────────
@@ -211,7 +216,7 @@ export async function logout(userId: string, dto: LogoutDto) {
 export async function getMe(userId: string) {
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, role, full_name, phone, avatar_url, account_id, is_active, is_approved, created_at')
+    .select('id, role, company_role, full_name, phone, avatar_url, account_id, is_active, is_approved, created_at')
     .eq('id', userId)
     .single()
 
@@ -221,15 +226,16 @@ export async function getMe(userId: string) {
   const { data: authUser } = await supabase.auth.admin.getUserById(userId)
 
   return {
-    id:         data.id,
-    email:      authUser.user?.email ?? '',
-    role:       data.role,
-    fullName:   data.full_name,
-    phone:      data.phone,
-    avatarUrl:  data.avatar_url,
-    accountId:  data.account_id,
-    isApproved: data.is_approved ?? false,
-    createdAt:  data.created_at,
+    id:          data.id,
+    email:       authUser.user?.email ?? '',
+    role:        data.role,
+    companyRole: data.company_role ?? null,
+    fullName:    data.full_name,
+    phone:       data.phone,
+    avatarUrl:   data.avatar_url,
+    accountId:   data.account_id,
+    isApproved:  data.is_approved ?? false,
+    createdAt:   data.created_at,
   }
 }
 
@@ -303,8 +309,11 @@ export async function register(
     throw AppError.internal('Failed to create company account — please try again or contact support')
   }
 
-  // Link the profile to the new account and persist phone
-  const profileUpdates: Record<string, unknown> = { account_id: account.account_id }
+  // Link the profile to the new account, set company_admin role, and persist phone
+  const profileUpdates: Record<string, unknown> = {
+    account_id:   account.account_id,
+    company_role: 'company_admin',
+  }
   if (dto.phone) profileUpdates.phone = dto.phone
 
   await supabase.from('profiles').update(profileUpdates).eq('id', userId)
@@ -315,17 +324,20 @@ export async function register(
     data.user!.email!,
     'shipper',
     account.account_id,
+    'company_admin',
     context,
   )
 
   return {
     ...tokens,
     user: {
-      id:        userId,
-      email:     data.user!.email!,
-      role:      'shipper' as const,
-      fullName:  dto.fullName,
-      accountId: account.account_id,
+      id:          userId,
+      email:       data.user!.email!,
+      role:        'shipper' as const,
+      companyRole: 'company_admin' as const,
+      fullName:    dto.fullName,
+      avatarUrl:   null,
+      accountId:   account.account_id,
     },
   }
 }

@@ -50,12 +50,19 @@ export const updateInvoiceSchema = createInvoiceSchema
   })
 
 export const listInvoicesQuerySchema = z.object({
-  page:       z.coerce.number().int().min(1).default(1),
-  limit:      z.coerce.number().int().min(1).max(500).default(20),
-  profileId:  z.string().uuid().optional(),
-  loadId:     z.string().uuid().optional(),
-  status:     z.enum(INVOICE_STATUSES).optional(),
-  search:     z.string().max(200).optional(),
+  page:         z.coerce.number().int().min(1).default(1),
+  limit:        z.coerce.number().int().min(1).max(500).default(20),
+  profileId:    z.string().uuid().optional(),
+  loadId:       z.string().uuid().optional(),
+  status:       z.enum(INVOICE_STATUSES).optional(),
+  search:       z.string().max(200).optional(),
+  dueDateFrom:  z.string().max(30).optional(),
+  dueDateTo:    z.string().max(30).optional(),
+  totalMin:     z.coerce.number().min(0).optional(),
+  totalMax:     z.coerce.number().min(0).optional(),
+  hasPdf:       z.enum(['true', 'false']).optional(),
+  sortBy:       z.enum(['invoice_number', 'status', 'due_date', 'total', 'balance_due', 'created_at']).optional(),
+  sortDir:      z.enum(['asc', 'desc']).optional(),
 })
 
 export type CreateInvoiceDto   = z.infer<typeof createInvoiceSchema>

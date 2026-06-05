@@ -3,6 +3,7 @@ import { AppError } from '../../lib/errors'
 import * as shipmentsRepo from './shipments.repository'
 import * as notificationsService from '../notifications/notifications.service'
 import {
+  SHIPMENT_STATUSES,
   STATUS_TRANSITIONS,
   DELETABLE_STATUSES,
   type ShipmentStatus,
@@ -11,6 +12,7 @@ import {
   type UpdateShipmentStatusDto,
   type DeleteShipmentDto,
   type AssignShipmentDto,
+  type AssignEmployeeDto,
   type ListShipmentsQuery,
 } from './shipments.schema'
 
@@ -35,25 +37,41 @@ function notifyUser(
 
 type ShipmentRow = Record<string, unknown>
 
-function assertTransition(current: ShipmentStatus, next: ShipmentStatus): void {
-  if (!STATUS_TRANSITIONS[current]?.includes(next)) {
+const TERMINAL_STATUSES = new Set<string>(['delivered', 'cancelled'])
+
+function assertTransition(current: string, next: string): void {
+  // Terminal system statuses are absolute — no transition out of them
+  if (TERMINAL_STATUSES.has(current)) {
     throw AppError.unprocessable(
-      `Cannot transition from '${current}' to '${next}'. ` +
-      `Allowed next states: ${STATUS_TRANSITIONS[current]?.join(', ') || 'none (terminal state)'}`,
+      `Cannot change status: '${current}' is a terminal state`,
     )
   }
+
+  // Both current and next are system statuses → enforce the state machine
+  const isCurrentSystem = SHIPMENT_STATUSES.includes(current as ShipmentStatus)
+  const isNextSystem    = SHIPMENT_STATUSES.includes(next as ShipmentStatus)
+
+  if (isCurrentSystem && isNextSystem) {
+    if (!STATUS_TRANSITIONS[current as ShipmentStatus]?.includes(next as ShipmentStatus)) {
+      throw AppError.unprocessable(
+        `Cannot transition from '${current}' to '${next}'. ` +
+        `Allowed: ${STATUS_TRANSITIONS[current as ShipmentStatus]?.join(', ') || 'none'}`,
+      )
+    }
+  }
+  // Current or next is a custom status → allow (informational update)
 }
 
 // ── Access guard ──────────────────────────────────────────────────────────────
-// A shipper can access a shipment if:
-//   a) it belongs to their account (account_id match), OR
-//   b) they created it (created_by match — covers pending loads not yet assigned)
-// Admins always have full access.
+// Admins: full access.
+// Company admins: shipments belonging to their account OR created by them.
+// Employees: only shipments explicitly assigned to them.
 async function requireShipmentAccess(
-  id:        string,
-  isAdmin:   boolean,
-  accountId?: string | null,
-  userId?:   string,
+  id:          string,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  userId?:     string,
+  companyRole?: string | null,
 ): Promise<ShipmentRow> {
   const { data, error } = await shipmentsRepo.findById(id)
   if (error || !data) throw AppError.notFound('Shipment')
@@ -61,10 +79,18 @@ async function requireShipmentAccess(
   const shipment = cast<ShipmentRow>(data)
 
   if (!isAdmin) {
-    const matchesAccount = accountId && shipment.account_id === accountId
-    const isCreator      = userId    && shipment.created_by  === userId
-    if (!matchesAccount && !isCreator) {
-      throw AppError.forbidden('You do not have access to this shipment')
+    if (companyRole === 'employee') {
+      // Employees can only access shipments assigned directly to them
+      if (shipment.assigned_employee_id !== userId) {
+        throw AppError.forbidden('You do not have access to this shipment')
+      }
+    } else {
+      // Company admins: must match on account or be the creator
+      const matchesAccount = accountId && shipment.account_id === accountId
+      const isCreator      = userId    && shipment.created_by  === userId
+      if (!matchesAccount && !isCreator) {
+        throw AppError.forbidden('You do not have access to this shipment')
+      }
     }
   }
 
@@ -73,24 +99,26 @@ async function requireShipmentAccess(
 
 // ── List ──────────────────────────────────────────────────────────────────────
 export async function listShipments(
-  query:     ListShipmentsQuery,
-  isAdmin:   boolean,
-  accountId?: string | null,
-  userId?:   string,
+  query:       ListShipmentsQuery,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  userId?:     string,
+  companyRole?: string | null,
 ) {
-  const { data, count, error } = await shipmentsRepo.findAll(query, accountId, isAdmin, userId)
+  const { data, count, error } = await shipmentsRepo.findAll(query, accountId, isAdmin, userId, companyRole)
   if (error) throw AppError.internal('Failed to fetch shipments')
   return { shipments: data ?? [], total: count ?? 0 }
 }
 
 // ── Get one ───────────────────────────────────────────────────────────────────
 export async function getShipment(
-  id:        string,
-  isAdmin:   boolean,
-  accountId?: string | null,
-  userId?:   string,
+  id:          string,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  userId?:     string,
+  companyRole?: string | null,
 ) {
-  const shipment = await requireShipmentAccess(id, isAdmin, accountId, userId)
+  const shipment = await requireShipmentAccess(id, isAdmin, accountId, userId, companyRole)
   const { data: history } = await shipmentsRepo.findStatusHistory(id)
   return { ...shipment, statusHistory: history ?? [] }
 }
@@ -104,23 +132,23 @@ export async function createShipment(
   let resolvedAccountId: string | null = null
 
   if (creatorRole === 'shipper') {
-    // Shipper creates load → auto-assign to themselves (look up their account)
+    // Shipping company creates load → auto-assign to their account
     const { data: profile } = await supabase
       .from('profiles')
       .select('account_id')
       .eq('id', createdBy)
       .single()
     resolvedAccountId = profile?.account_id ?? null
-  } else if (dto.shipperId) {
-    // Admin explicitly assigns to a shipper
-    const { data: profile, error: profileErr } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('id', dto.shipperId)
-      .eq('role', 'shipper')
+  } else if (dto.accountId) {
+    // Admin pre-assigns to a shipping company
+    const { data: account, error: accountErr } = await supabase
+      .from('accounts')
+      .select('account_id, is_active')
+      .eq('account_id', dto.accountId)
       .single()
-    if (profileErr || !profile) throw AppError.notFound('Shipper user')
-    resolvedAccountId = profile.account_id ?? null
+    if (accountErr || !account) throw AppError.notFound('Shipping company')
+    if (!account.is_active) throw AppError.unprocessable('Cannot assign to an inactive shipping company')
+    resolvedAccountId = account.account_id
   }
 
   const { data, error } = await shipmentsRepo.create({
@@ -167,13 +195,14 @@ export async function createShipment(
 
 // ── Update ────────────────────────────────────────────────────────────────────
 export async function updateShipment(
-  id:        string,
-  dto:       UpdateShipmentDto,
-  isAdmin:   boolean,
-  accountId?: string | null,
-  userId?:   string,
+  id:          string,
+  dto:         UpdateShipmentDto,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  userId?:     string,
+  companyRole?: string | null,
 ) {
-  await requireShipmentAccess(id, isAdmin, accountId, userId)
+  await requireShipmentAccess(id, isAdmin, accountId, userId, companyRole)
 
   // Shippers cannot touch financial or actual-event fields.
   if (!isAdmin) {
@@ -228,14 +257,15 @@ export async function updateShipment(
 
 // ── Status transition ─────────────────────────────────────────────────────────
 export async function updateStatus(
-  id:        string,
-  dto:       UpdateShipmentStatusDto,
-  userId:    string,
-  isAdmin:   boolean,
-  accountId?: string | null,
+  id:          string,
+  dto:         UpdateShipmentStatusDto,
+  userId:      string,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  companyRole?: string | null,
 ) {
-  const shipment      = await requireShipmentAccess(id, isAdmin, accountId, userId)
-  const currentStatus = shipment.status as ShipmentStatus
+  const shipment      = await requireShipmentAccess(id, isAdmin, accountId, userId, companyRole)
+  const currentStatus = shipment.status as string
 
   assertTransition(currentStatus, dto.status)
 
@@ -280,11 +310,15 @@ export async function updateStatus(
   return data
 }
 
-// ── Assign to shipper ─────────────────────────────────────────────────────────
-// Admin-only. Shipment must be 'confirmed' and not shipper-owned. Accepts the
-// shipper's USER id, looks up their account_id, sets it on the shipment and
-// advances status to 'assigned'.
-export async function assignToShipper(
+// Statuses where company assignment is locked (operational work has started).
+const ASSIGNMENT_LOCKED_STATUSES: ShipmentStatus[] = [
+  'confirmed', 'assigned', 'picked_up', 'in_transit', 'out_for_delivery', 'delivered', 'cancelled',
+]
+
+// ── Assign to Shipping Company (admin-only) ───────────────────────────────────
+// Admin assigns or reassigns a pending, admin-created load to a shipping company.
+// Assignment is locked once status advances to 'confirmed' or beyond.
+export async function assignToCompany(
   shipmentId: string,
   dto:        AssignShipmentDto,
   assignedBy: string,
@@ -297,66 +331,98 @@ export async function assignToShipper(
 
   if (shipment.created_by_role === 'shipper') {
     throw AppError.forbidden(
-      'This load was created by a shipper and its assignment is permanently locked. Reassignment is not permitted.',
+      'This load was created by a shipping company and its assignment is permanently locked. Reassignment is not permitted.',
     )
   }
 
-  if (currentStatus !== 'confirmed') {
+  if (ASSIGNMENT_LOCKED_STATUSES.includes(currentStatus)) {
     throw AppError.unprocessable(
-      `Shipment must be 'confirmed' before assigning a shipper. Current status: '${currentStatus}'`,
+      `This load cannot be reassigned because operational processing has already started. Current status: '${currentStatus}'.`,
     )
   }
 
-  // Resolve the shipper user → their account
-  const { data: profile, error: profileErr } = await supabase
-    .from('profiles')
-    .select('account_id, full_name')
-    .eq('id', dto.userId)
-    .eq('role', 'shipper')
-    .single()
-
-  if (profileErr || !profile) throw AppError.notFound('Shipper user')
-  if (!profile.account_id) throw AppError.unprocessable('This shipper has no associated account')
-
-  // Verify account is active
+  // Verify the target company exists and is active
   const { data: account, error: accountErr } = await supabase
     .from('accounts')
     .select('account_id, account_name, is_active')
-    .eq('account_id', profile.account_id)
+    .eq('account_id', dto.accountId)
     .single()
 
-  if (accountErr || !account) throw AppError.notFound('Shipper account')
-  if (!account.is_active) throw AppError.unprocessable('Cannot assign to an inactive shipper account')
-
-  const targetAccountId = profile.account_id
+  if (accountErr || !account) throw AppError.notFound('Shipping company')
+  if (!account.is_active) throw AppError.unprocessable('Cannot assign to an inactive shipping company')
 
   const { data, error } = await shipmentsRepo.updateById(shipmentId, {
-    account_id: targetAccountId,
-    status:     'assigned',
+    account_id: dto.accountId,
   })
   if (error || !data) throw AppError.internal('Failed to assign shipment')
 
-  // Notify the assigned shipper user
-  notifyUser(
-    dto.userId,
-    'shipment_assigned',
-    'Load assigned to you',
-    `Load has been assigned to you.`,
-    shipmentId,
-  )
+  // Notify all company admins of the assignment
+  const { data: admins } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('account_id', dto.accountId)
+    .eq('company_role', 'company_admin')
+
+  for (const admin of admins ?? []) {
+    notifyUser(admin.id, 'shipment_assigned', 'Load assigned to your company', `Load has been assigned to ${account.account_name}.`, shipmentId)
+  }
+
+  return data
+}
+
+// ── Assign to Employee (company-admin-only) ────────────────────────────────────
+// Company admin assigns (or unassigns) a load to an employee within the same company.
+export async function assignToEmployee(
+  shipmentId:     string,
+  dto:            AssignEmployeeDto,
+  companyAdminId: string,
+  accountId:      string,
+) {
+  const { data: raw, error: fetchErr } = await shipmentsRepo.findById(shipmentId)
+  if (fetchErr || !raw) throw AppError.notFound('Shipment')
+
+  const shipment = cast<ShipmentRow>(raw)
+
+  // Verify the load belongs to this company
+  if (shipment.account_id !== accountId) {
+    throw AppError.forbidden('This load does not belong to your company')
+  }
+
+  if (dto.employeeId !== null) {
+    // Verify the employee belongs to the same company
+    const { data: employee, error: empErr } = await supabase
+      .from('profiles')
+      .select('id, full_name, account_id, company_role')
+      .eq('id', dto.employeeId)
+      .eq('account_id', accountId)
+      .eq('company_role', 'employee')
+      .single()
+
+    if (empErr || !employee) {
+      throw AppError.notFound('Employee not found in your company')
+    }
+
+    notifyUser(dto.employeeId, 'shipment_assigned', 'Load assigned to you', 'A load has been assigned to you.', shipmentId)
+  }
+
+  const { data, error } = await shipmentsRepo.updateById(shipmentId, {
+    assigned_employee_id: dto.employeeId,
+  })
+  if (error || !data) throw AppError.internal('Failed to assign employee')
 
   return data
 }
 
 // ── Soft delete ───────────────────────────────────────────────────────────────
 export async function deleteShipment(
-  id:        string,
-  dto:       DeleteShipmentDto,
-  userId:    string,
-  isAdmin:   boolean,
-  accountId?: string | null,
+  id:          string,
+  dto:         DeleteShipmentDto,
+  userId:      string,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  companyRole?: string | null,
 ) {
-  const shipment      = await requireShipmentAccess(id, isAdmin, accountId, userId)
+  const shipment      = await requireShipmentAccess(id, isAdmin, accountId, userId, companyRole)
   const currentStatus = shipment.status as ShipmentStatus
 
   if (!DELETABLE_STATUSES.includes(currentStatus)) {

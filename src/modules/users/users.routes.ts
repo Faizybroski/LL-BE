@@ -16,6 +16,10 @@ export const usersRouter = Router()
 usersRouter.get('/me', authMiddleware, usersController.getMe)
 usersRouter.patch('/me', authMiddleware, validate(updateProfileSchema), usersController.updateMe)
 
+// ── Avatar upload (signed-URL flow — bypasses storage RLS) ───────────────────
+usersRouter.post('/me/avatar/upload-url', authMiddleware, usersController.getAvatarUploadUrl)
+usersRouter.delete('/me/avatar', authMiddleware, usersController.removeMyAvatar)
+
 // ── Admin: list and manage all users ─────────────────────────────────────────
 usersRouter.get(
   '/',

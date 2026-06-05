@@ -1,18 +1,19 @@
 import jwt, { SignOptions } from 'jsonwebtoken'
 import { env } from './env'
 import { AppError } from './errors'
-import type { UserRole } from '../middleware/auth.middleware'
+import type { UserRole, CompanyRole } from '../middleware/auth.middleware'
 
 // ── Payload contract ────────────────────────────────────────────────────────
 // Minimal claims — role is included so middleware can authorise without a DB call.
 // Never include sensitive data (passwords, PII beyond email/role) in a JWT.
 export interface JwtPayload {
-  sub:       string          // user ID (Supabase auth.users.id)
-  email:     string
-  role:      UserRole
-  accountId: string | null   // shipper's account; null for admin users
-  iat:       number          // issued-at  (added automatically by jsonwebtoken)
-  exp:       number          // expiry     (added automatically by jsonwebtoken)
+  sub:         string          // user ID (Supabase auth.users.id)
+  email:       string
+  role:        UserRole
+  accountId:   string | null   // shipper's account; null for admin users
+  companyRole: CompanyRole      // company_admin | employee | null (null for admins)
+  iat:         number          // issued-at  (added automatically by jsonwebtoken)
+  exp:         number          // expiry     (added automatically by jsonwebtoken)
 }
 
 // ── Sign ─────────────────────────────────────────────────────────────────────

@@ -41,6 +41,24 @@ export async function updateUserRole(req: Request, res: Response, next: NextFunc
   }
 }
 
+export async function getAvatarUploadUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await usersService.getAvatarUploadUrl(req.user!.id)
+    ok(res, result)
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function removeMyAvatar(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await usersService.removeAvatar(req.user!.id)
+    ok(res, null, 'Avatar removed')
+  } catch (err) {
+    next(err)
+  }
+}
+
 export async function approveUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const updated = await usersService.approveUser(param(req, 'id'), req.body as ApproveUserDto)

@@ -2,10 +2,11 @@ import { Request, Response, NextFunction } from 'express'
 import { verifyAccessToken } from '../lib/jwt'
 import { AppError } from '../lib/errors'
 
-// ── Role type ─────────────────────────────────────────────────────────────────
+// ── Role types ────────────────────────────────────────────────────────────────
 // Defined here so every module that imports AuthenticatedRequest gets it
 // from one canonical location.
-export type UserRole = 'admin' | 'shipper'
+export type UserRole    = 'admin' | 'shipper'
+export type CompanyRole = 'company_admin' | 'employee' | null
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 // Previous implementation: supabase.auth.getUser(token) — 1 network call per request.
@@ -27,10 +28,11 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
   // verifyAccessToken throws AppError — caught by the global error handler
   const payload = verifyAccessToken(token!)
   req.user = {
-    id:        payload.sub,
-    email:     payload.email,
-    role:      payload.role,
-    accountId: payload.accountId ?? null,
+    id:          payload.sub,
+    email:       payload.email,
+    role:        payload.role,
+    accountId:   payload.accountId ?? null,
+    companyRole: payload.companyRole ?? null,
   }
 
   next()

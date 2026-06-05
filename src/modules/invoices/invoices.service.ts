@@ -36,16 +36,44 @@ function itemsToRows(invoiceId: string, items: CreateInvoiceDto['items']) {
   }))
 }
 
-export async function listInvoices(query: ListInvoicesQuery, callerRole: string, callerId: string, callerAccountId?: string | null) {
-  const accountId = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
-  const { data, count, error } = await repo.findAll(query, accountId)
+export async function listInvoices(
+  query: ListInvoicesQuery,
+  callerRole: string,
+  callerId: string,
+  callerAccountId?: string | null,
+  companyRole?: string | null,
+) {
+  const accountId  = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
+  const employeeId = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
+  const { data, count, error } = await repo.findAll(query, accountId, employeeId)
   if (error) throw AppError.internal('Failed to fetch invoices')
   return { invoices: data ?? [], total: count ?? 0 }
 }
 
-export async function getInvoice(id: string, callerRole: string, callerAccountId?: string | null) {
+export async function getInvoice(
+  id: string,
+  callerRole: string,
+  callerAccountId?: string | null,
+  callerId?: string,
+  companyRole?: string | null,
+) {
   const { data, error } = await repo.findById(id)
   if (error || !data) throw AppError.notFound('Invoice')
+
+  if (callerRole === 'shipper') {
+    if (!callerAccountId) throw AppError.forbidden()
+
+    if (companyRole === 'employee' && callerId) {
+      if (!data.load_id || !(await repo.loadBelongsToEmployee(data.load_id, callerId))) {
+        throw AppError.forbidden()
+      }
+    } else if (companyRole === 'company_admin') {
+      if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
+        throw AppError.forbidden()
+      }
+    }
+  }
+
   return data
 }
 
@@ -94,12 +122,31 @@ export async function createInvoice(dto: CreateInvoiceDto, createdBy: string) {
   return full
 }
 
-export async function updateInvoice(id: string, dto: UpdateInvoiceDto, callerRole: string) {
+export async function updateInvoice(
+  id: string,
+  dto: UpdateInvoiceDto,
+  callerRole: string,
+  callerId?: string,
+  companyRole?: string | null,
+  callerAccountId?: string | null,
+) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Invoice')
 
   if (callerRole === 'shipper' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft invoices can be edited')
+  }
+
+  if (callerRole === 'shipper') {
+    if (companyRole === 'employee' && callerId) {
+      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
+        throw AppError.forbidden()
+      }
+    } else if (companyRole === 'company_admin' && callerAccountId) {
+      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
+        throw AppError.forbidden()
+      }
+    }
   }
 
   const items      = dto.items ?? []
@@ -143,12 +190,30 @@ export async function updateInvoice(id: string, dto: UpdateInvoiceDto, callerRol
   return full
 }
 
-export async function deleteInvoice(id: string, callerRole: string) {
+export async function deleteInvoice(
+  id: string,
+  callerRole: string,
+  callerId?: string,
+  companyRole?: string | null,
+  callerAccountId?: string | null,
+) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Invoice')
 
   if (callerRole === 'shipper' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft invoices can be deleted')
+  }
+
+  if (callerRole === 'shipper') {
+    if (companyRole === 'employee' && callerId) {
+      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
+        throw AppError.forbidden()
+      }
+    } else if (companyRole === 'company_admin' && callerAccountId) {
+      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
+        throw AppError.forbidden()
+      }
+    }
   }
 
   const { error } = await repo.softDelete(id)

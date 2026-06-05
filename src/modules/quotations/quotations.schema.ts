@@ -51,12 +51,21 @@ export const updateQuotationSchema = createQuotationSchema
   })
 
 export const listQuotationsQuerySchema = z.object({
-  page:      z.coerce.number().int().min(1).default(1),
-  limit:     z.coerce.number().int().min(1).max(500).default(20),
-  profileId: z.string().uuid().optional(),
-  loadId:    z.string().uuid().optional(),
-  status:    z.enum(QUOTATION_STATUSES).optional(),
-  search:    z.string().max(200).optional(),
+  page:           z.coerce.number().int().min(1).default(1),
+  limit:          z.coerce.number().int().min(1).max(500).default(20),
+  profileId:      z.string().uuid().optional(),
+  loadId:         z.string().uuid().optional(),
+  status:         z.enum(QUOTATION_STATUSES).optional(),
+  search:         z.string().max(200).optional(),
+  issueDateFrom:  z.string().max(30).optional(),
+  issueDateTo:    z.string().max(30).optional(),
+  expiryDateFrom: z.string().max(30).optional(),
+  expiryDateTo:   z.string().max(30).optional(),
+  totalMin:       z.coerce.number().min(0).optional(),
+  totalMax:       z.coerce.number().min(0).optional(),
+  hasPdf:         z.enum(['true', 'false']).optional(),
+  sortBy:         z.enum(['quotation_number', 'status', 'issue_date', 'expiry_date', 'total', 'created_at']).optional(),
+  sortDir:        z.enum(['asc', 'desc']).optional(),
 })
 
 export const generatePdfSchema = z.object({})

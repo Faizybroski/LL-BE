@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const NOTE_ENTITY_TYPES = ['shipment', 'carrier', 'assignment', 'shipper'] as const
+export const NOTE_ENTITY_TYPES = ['shipment', 'carrier', 'assignment', 'shipper', 'account'] as const
 
 export const createNoteSchema = z.object({
   entityType: z.enum(NOTE_ENTITY_TYPES),

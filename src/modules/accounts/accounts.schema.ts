@@ -28,10 +28,14 @@ export const updateAccountSchema = createAccountSchema
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })
 
 export const listAccountsQuerySchema = z.object({
-  page:     z.coerce.number().int().min(1).default(1),
-  limit:    z.coerce.number().int().min(1).max(100).default(20),
-  search:   z.string().optional(),
-  isActive: z.enum(['true', 'false']).optional(),
+  page:      z.coerce.number().int().min(1).default(1),
+  limit:     z.coerce.number().int().min(1).max(100).default(20),
+  search:    z.string().optional(),
+  isActive:  z.enum(['true', 'false']).optional(),
+  dateFrom:  z.string().max(30).optional(),
+  dateTo:    z.string().max(30).optional(),
+  sortBy:    z.enum(['account_name', 'is_active', 'created_at']).optional(),
+  sortDir:   z.enum(['asc', 'desc']).optional(),
 })
 
 // ── Account Notes (admin-only) ────────────────────────────────────────────────
@@ -52,10 +56,16 @@ export const updateOwnProfileSchema = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })
 
+// ── Company logo update (company_admin only) ──────────────────────────────────
+export const updateCompanyLogoSchema = z.object({
+  logoUrl: z.string().url().nullable(),
+})
+
 // ── DTO types ─────────────────────────────────────────────────────────────────
-export type CreateAccountDto     = z.infer<typeof createAccountSchema>
-export type UpdateAccountDto     = z.infer<typeof updateAccountSchema>
-export type ListAccountsQuery    = z.infer<typeof listAccountsQuerySchema>
-export type CreateAccountNoteDto = z.infer<typeof createAccountNoteSchema>
-export type UpdateAccountNoteDto = z.infer<typeof updateAccountNoteSchema>
-export type UpdateOwnProfileDto  = z.infer<typeof updateOwnProfileSchema>
+export type CreateAccountDto      = z.infer<typeof createAccountSchema>
+export type UpdateAccountDto      = z.infer<typeof updateAccountSchema>
+export type ListAccountsQuery     = z.infer<typeof listAccountsQuerySchema>
+export type CreateAccountNoteDto  = z.infer<typeof createAccountNoteSchema>
+export type UpdateAccountNoteDto  = z.infer<typeof updateAccountNoteSchema>
+export type UpdateOwnProfileDto   = z.infer<typeof updateOwnProfileSchema>
+export type UpdateCompanyLogoDto  = z.infer<typeof updateCompanyLogoSchema>

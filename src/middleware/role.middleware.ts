@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import { AppError } from '../lib/errors'
 import type { UserRole } from './auth.middleware'
 
+
 // ── requireRole ───────────────────────────────────────────────────────────────
 // Usage:  router.get('/admin-only', authMiddleware, requireRole('admin'), handler)
 //         router.get('/either',     authMiddleware, requireRole('admin', 'shipper'), handler)
@@ -30,6 +31,19 @@ export function requireRole(...allowedRoles: UserRole[]) {
 // ── requireAdmin ──────────────────────────────────────────────────────────────
 // Shorthand for requireRole('admin') — cleaner at the call site.
 export const requireAdmin = requireRole('admin')
+
+// ── requireCompanyAdmin ───────────────────────────────────────────────────────
+// Requires the user to be a shipper with company_role = 'company_admin'.
+// Used for routes that only company admins (not employees) may call.
+export function requireCompanyAdmin(req: Request, _res: Response, next: NextFunction): void {
+  if (!req.user) {
+    return void next(AppError.unauthorized())
+  }
+  if (req.user.role !== 'shipper' || req.user.companyRole !== 'company_admin') {
+    return void next(AppError.forbidden('This action requires Company Admin role'))
+  }
+  next()
+}
 
 // ── requireOwnerOrAdmin ───────────────────────────────────────────────────────
 // Allows the resource owner OR any admin to proceed.

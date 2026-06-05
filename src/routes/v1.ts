@@ -8,6 +8,10 @@ import { notificationsRouter } from '../modules/notifications/notifications.rout
 import { dashboardRouter } from '../modules/dashboard/dashboard.routes'
 import { quotationsRouter } from '../modules/quotations/quotations.routes'
 import { invoicesRouter } from '../modules/invoices/invoices.routes'
+import { companyUsersRouter } from '../modules/company-users/company-users.routes'
+import { locationsRouter } from '../modules/locations/locations.routes'
+import { trackingRouter } from '../modules/tracking/tracking.routes'
+import { statusesRouter } from '../modules/statuses/statuses.routes'
 
 export const v1Router = Router()
 
@@ -20,3 +24,7 @@ v1Router.use('/notifications', notificationsRouter)
 v1Router.use('/dashboard',     dashboardRouter)
 v1Router.use('/quotations',    quotationsRouter)
 v1Router.use('/invoices',      invoicesRouter)
+v1Router.use('/company/employees', companyUsersRouter)
+v1Router.use('/locations',     locationsRouter)
+v1Router.use('/tracking',      trackingRouter)
+v1Router.use('/statuses',      statusesRouter)

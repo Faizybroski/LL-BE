@@ -10,6 +10,7 @@ const LIST_SELECT = `
   shipment_type,
   status,
   account_id,
+  assigned_employee_id,
   origin_address,
   origin_city,
   origin_state,
@@ -38,8 +39,9 @@ const LIST_SELECT = `
   created_by_role,
   created_at,
   updated_at,
-  accounts ( account_id, account_name, account_code ),
-  profiles!created_by ( id, full_name, role )
+  accounts ( account_id, account_name, account_code, logo_url ),
+  profiles!created_by ( id, full_name, role, avatar_url ),
+  employee:profiles!assigned_employee_id ( id, full_name, avatar_url )
 `
 
 // DETAIL_SELECT: full projection for single-record fetch.
@@ -49,6 +51,7 @@ const DETAIL_SELECT = `
   shipment_type,
   status,
   account_id,
+  assigned_employee_id,
   origin_address,
   origin_city,
   origin_state,
@@ -78,8 +81,9 @@ const DETAIL_SELECT = `
   created_by_role,
   created_at,
   updated_at,
-  accounts ( account_id, account_name, account_code, contact_name, contact_email ),
-  profiles!created_by ( id, full_name, role )
+  accounts ( account_id, account_name, account_code, logo_url, contact_name, contact_email ),
+  profiles!created_by ( id, full_name, role, avatar_url ),
+  employee:profiles!assigned_employee_id ( id, full_name, avatar_url )
 `
 
 // ── Shipments ─────────────────────────────────────────────────────────────────
@@ -93,39 +97,51 @@ export async function findById(id: string) {
 }
 
 export async function findAll(
-  query:     ListShipmentsQuery,
-  accountId?: string | null,
-  isAdmin    = false,
-  userId?:   string,
+  query:       ListShipmentsQuery,
+  accountId?:  string | null,
+  isAdmin      = false,
+  userId?:     string,
+  companyRole?: string | null,
 ) {
   const offset = (query.page - 1) * query.limit
+
+  const sortField = query.sortBy ?? 'created_at'
+  const ascending = query.sortDir === 'asc'
 
   let q = supabase
     .from('shipments')
     .select(LIST_SELECT, { count: 'exact' })
     .is('deleted_at', null)
     .range(offset, offset + query.limit - 1)
-    .order('created_at', { ascending: false })
+    .order(sortField, { ascending })
 
   // ── RBAC scoping ──────────────────────────────────────────────────────────
-  // Shippers see shipments belonging to their account OR created by them
-  // (covers pending loads they created before being assigned an account).
-  // Admins can optionally filter by account_id.
   if (!isAdmin) {
-    if (accountId && userId) {
-      q = q.or(`account_id.eq.${accountId},created_by.eq.${userId}`)
-    } else if (accountId) {
-      q = q.eq('account_id', accountId)
-    } else if (userId) {
-      q = q.eq('created_by', userId)
+    if (companyRole === 'employee' && userId) {
+      // Employees see only shipments assigned to them
+      q = q.eq('assigned_employee_id', userId)
+    } else {
+      // Company admins see all shipments belonging to their account OR created by them
+      if (accountId && userId) {
+        q = q.or(`account_id.eq.${accountId},created_by.eq.${userId}`)
+      } else if (accountId) {
+        q = q.eq('account_id', accountId)
+      } else if (userId) {
+        q = q.eq('created_by', userId)
+      }
     }
   } else if (isAdmin && query.accountId) {
     q = q.eq('account_id', query.accountId)
   }
 
   // ── Filters ───────────────────────────────────────────────────────────────
-  if (query.status)       q = q.eq('status', query.status)
-  if (query.shipmentType) q = q.eq('shipment_type', query.shipmentType)
+  if (query.status)        q = q.eq('status', query.status)
+  if (query.shipmentType)  q = q.eq('shipment_type', query.shipmentType)
+  if (query.createdByRole) q = q.eq('created_by_role', query.createdByRole)
+  if (query.dateFrom)      q = q.gte('created_at', query.dateFrom)
+  if (query.dateTo)        q = q.lte('created_at', `${query.dateTo}T23:59:59.999Z`)
+  if (query.updatedFrom)   q = q.gte('updated_at', query.updatedFrom)
+  if (query.updatedTo)     q = q.lte('updated_at', `${query.updatedTo}T23:59:59.999Z`)
 
   // ── Search ────────────────────────────────────────────────────────────────
   // Covers load_number (trigram index), reference_number, origin and dest city.

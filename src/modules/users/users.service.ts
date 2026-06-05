@@ -9,15 +9,16 @@ import type { UpdateProfileDto, ListUsersQuery, UpdateUserRoleDto, ApproveUserDt
 // otherwise it is omitted (undefined).
 function formatProfile(row: Record<string, unknown>, email?: string) {
   return {
-    id:         row.id as string,
-    email:      email ?? (row.email as string | undefined) ?? '',
-    role:       row.role as string,
-    fullName:   (row.full_name as string | null) ?? null,
-    phone:      (row.phone as string | null) ?? null,
-    avatarUrl:  (row.avatar_url as string | null) ?? null,
-    accountId:  (row.account_id as string | null) ?? null,
-    isApproved: (row.is_approved as boolean) ?? false,
-    createdAt:  row.created_at as string,
+    id:          row.id as string,
+    email:       email ?? (row.email as string | undefined) ?? '',
+    role:        row.role as string,
+    companyRole: (row.company_role as string | null) ?? null,
+    fullName:    (row.full_name as string | null) ?? null,
+    phone:       (row.phone as string | null) ?? null,
+    avatarUrl:   (row.avatar_url as string | null) ?? null,
+    accountId:   (row.account_id as string | null) ?? null,
+    isApproved:  (row.is_approved as boolean) ?? false,
+    createdAt:   row.created_at as string,
   }
 }
 
@@ -69,6 +70,37 @@ export async function updateUserRole(id: string, dto: UpdateUserRoleDto) {
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)
   return formatProfile(data as Record<string, unknown>, authUser.user?.email)
+}
+
+// ── Avatar storage (signed-URL flow) ─────────────────────────────────────────
+// The frontend uses a custom JWT (not Supabase Auth), so auth.uid() is always
+// NULL when the browser client calls storage directly — causing RLS violations.
+// We fix this by having the backend (service-role) generate a signed upload URL
+// that the frontend can use without a Supabase Auth session.
+
+export async function getAvatarUploadUrl(userId: string) {
+  const path = `${userId}/avatar.webp`
+  const { data, error } = await supabase.storage
+    .from('profile-avatars')
+    .createSignedUploadUrl(path)
+  if (error || !data) throw AppError.internal('Failed to generate avatar upload URL')
+
+  const { data: pub } = supabase.storage.from('profile-avatars').getPublicUrl(path)
+  return {
+    signedUrl: data.signedUrl,
+    token:     data.token,
+    path:      data.path,
+    publicUrl: pub.publicUrl,
+  }
+}
+
+export async function removeAvatar(userId: string) {
+  await supabase.storage.from('profile-avatars').remove([`${userId}/avatar.webp`])
+  const { error } = await usersRepo.updateById(userId, {
+    avatar_url: null,
+    updated_at: new Date().toISOString(),
+  })
+  if (error) throw AppError.internal('Failed to clear avatar')
 }
 
 export async function approveUser(id: string, dto: ApproveUserDto) {

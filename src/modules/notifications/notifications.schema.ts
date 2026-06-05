@@ -9,6 +9,9 @@ export const NOTIFICATION_TYPES = [
   'shipment_delivered',
   'shipment_cancelled',
   'assignment_created',
+  'tracking_event_created',
+  'tracking_event_updated',
+  'tracking_event_deleted',
   'system',
 ] as const
 

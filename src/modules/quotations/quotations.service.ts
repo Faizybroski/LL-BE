@@ -10,20 +10,42 @@ function computeTotals(items: { quantity: number; unit_price: number }[], discou
   return { subtotal: Math.round(subtotal * 100) / 100, tax, total }
 }
 
-export async function listQuotations(query: ListQuotationsQuery, callerRole: string, callerId: string, callerAccountId?: string | null) {
-  const accountId = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
-  const { data, count, error } = await repo.findAll(query, accountId)
+export async function listQuotations(
+  query: ListQuotationsQuery,
+  callerRole: string,
+  callerId: string,
+  callerAccountId?: string | null,
+  companyRole?: string | null,
+) {
+  const accountId  = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
+  const employeeId = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
+  const { data, count, error } = await repo.findAll(query, accountId, employeeId)
   if (error) throw AppError.internal('Failed to fetch quotations')
   return { quotations: data ?? [], total: count ?? 0 }
 }
 
-export async function getQuotation(id: string, callerRole: string, callerAccountId?: string | null) {
+export async function getQuotation(
+  id: string,
+  callerRole: string,
+  callerAccountId?: string | null,
+  callerId?: string,
+  companyRole?: string | null,
+) {
   const { data, error } = await repo.findById(id)
   if (error || !data) throw AppError.notFound('Quotation')
 
   if (callerRole === 'shipper') {
-    // Access check handled by RLS; extra guard here for clarity
     if (!callerAccountId) throw AppError.forbidden()
+
+    if (companyRole === 'employee' && callerId) {
+      if (!data.load_id || !(await repo.loadBelongsToEmployee(data.load_id, callerId))) {
+        throw AppError.forbidden()
+      }
+    } else if (companyRole === 'company_admin') {
+      if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
+        throw AppError.forbidden()
+      }
+    }
   }
 
   return data
@@ -77,12 +99,31 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
   return full
 }
 
-export async function updateQuotation(id: string, dto: UpdateQuotationDto, callerRole: string) {
+export async function updateQuotation(
+  id: string,
+  dto: UpdateQuotationDto,
+  callerRole: string,
+  callerId?: string,
+  companyRole?: string | null,
+  callerAccountId?: string | null,
+) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Quotation')
 
   if (callerRole === 'shipper' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft quotations can be edited')
+  }
+
+  if (callerRole === 'shipper') {
+    if (companyRole === 'employee' && callerId) {
+      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
+        throw AppError.forbidden()
+      }
+    } else if (companyRole === 'company_admin' && callerAccountId) {
+      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
+        throw AppError.forbidden()
+      }
+    }
   }
 
   const items = dto.items ?? []
@@ -136,12 +177,30 @@ export async function updateQuotation(id: string, dto: UpdateQuotationDto, calle
   return full
 }
 
-export async function deleteQuotation(id: string, callerRole: string) {
+export async function deleteQuotation(
+  id: string,
+  callerRole: string,
+  callerId?: string,
+  companyRole?: string | null,
+  callerAccountId?: string | null,
+) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Quotation')
 
   if (callerRole === 'shipper' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft quotations can be deleted')
+  }
+
+  if (callerRole === 'shipper') {
+    if (companyRole === 'employee' && callerId) {
+      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
+        throw AppError.forbidden()
+      }
+    } else if (companyRole === 'company_admin' && callerAccountId) {
+      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
+        throw AppError.forbidden()
+      }
+    }
   }
 
   const { error } = await repo.softDelete(id)

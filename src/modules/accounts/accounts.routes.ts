@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireAdmin } from '../../middleware/role.middleware'
+import { requireAdmin, requireCompanyAdmin } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createAccountSchema,
@@ -9,6 +9,7 @@ import {
   createAccountNoteSchema,
   updateAccountNoteSchema,
   updateOwnProfileSchema,
+  updateCompanyLogoSchema,
 } from './accounts.schema'
 import * as accountsController from './accounts.controller'
 
@@ -27,6 +28,29 @@ accountsRouter.patch(
   authMiddleware,
   validate(updateOwnProfileSchema),
   accountsController.updateMyProfile,
+)
+
+accountsRouter.patch(
+  '/me/logo',
+  authMiddleware,
+  requireCompanyAdmin,
+  validate(updateCompanyLogoSchema),
+  accountsController.updateMyCompanyLogo,
+)
+
+// ── Logo upload (signed-URL flow — bypasses storage RLS) ─────────────────────
+accountsRouter.post(
+  '/me/logo/upload-url',
+  authMiddleware,
+  requireCompanyAdmin,
+  accountsController.myLogoUploadUrl,
+)
+
+accountsRouter.delete(
+  '/me/logo',
+  authMiddleware,
+  requireCompanyAdmin,
+  accountsController.removeMyLogo,
 )
 
 // ── Admin: Account CRUD ───────────────────────────────────────────────────────
@@ -59,6 +83,14 @@ accountsRouter.patch(
   requireAdmin,
   validate(updateAccountSchema),
   accountsController.update,
+)
+
+accountsRouter.patch(
+  '/:id/logo',
+  authMiddleware,
+  requireAdmin,
+  validate(updateCompanyLogoSchema),
+  accountsController.updateOneCompanyLogo,
 )
 
 accountsRouter.delete(

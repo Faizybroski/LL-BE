@@ -1,5 +1,6 @@
 import { supabase } from '../../services/supabase.service'
 import { SHIPMENT_STATUSES, type ShipmentStatus } from '../shipments/shipments.schema'
+import * as trackingService from '../tracking/tracking.service'
 
 // Statuses that represent an actively-moving load (not yet terminal)
 const ACTIVE_STATUSES: ShipmentStatus[] = [
@@ -14,16 +15,17 @@ export interface TrendPoint {
 }
 
 export interface DashboardStats {
-  byStatus:          StatusCounts
-  total:             number
-  activeLoads:       number
+  byStatus:             StatusCounts
+  total:                number
+  activeLoads:          number
   // 30-day sparkline data (index 0 = 30 days ago, index 29 = today)
-  trend:             TrendPoint[]
+  trend:                TrendPoint[]
   // Previous 30-day total — used by frontend to compute growth %
-  prevPeriodTotal:   number
+  prevPeriodTotal:      number
+  recentTrackingEvents: unknown[]
   // Admin-only
-  totalShippers?:    number
-  pendingApprovals?: number
+  totalShippers?:       number
+  pendingApprovals?:    number
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -42,9 +44,10 @@ function daysAgo(n: number): Date {
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export async function getDashboardStats(
-  isAdmin:   boolean,
-  accountId?: string | null,
-  userId?:    string,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  userId?:     string,
+  companyRole?: string | null,
 ): Promise<DashboardStats> {
   // Date boundaries
   const today       = new Date()
@@ -52,12 +55,19 @@ export async function getDashboardStats(
   const periodStart = daysAgo(29)   // start of current 30-day window
   const prevStart   = daysAgo(59)   // start of previous 30-day window
 
-  // Build a scoped base query for this user/account
-  function buildBase(): any {
+  // Build a scoped, filtered base query for this user/account.
+  // select() must be called here — filter methods (.is, .eq, etc.) are only
+  // available on PostgrestFilterBuilder, which is returned by .select(), not
+  // by .from() alone (PostgrestQueryBuilder has no filter methods in v2).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function buildBase(columns: string, opts?: object): any {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = (supabase.from('shipments') as any).is('deleted_at', null)
+    let q: any = supabase.from('shipments').select(columns, opts).is('deleted_at', null)
     if (!isAdmin) {
-      if (accountId && userId) {
+      if (companyRole === 'employee' && userId) {
+        // Employee: only their assigned loads
+        q = q.eq('assigned_employee_id', userId)
+      } else if (accountId && userId) {
         q = q.or(`account_id.eq.${accountId},created_by.eq.${userId}`)
       } else if (accountId) {
         q = q.eq('account_id', accountId)
@@ -72,14 +82,12 @@ export async function getDashboardStats(
 
   // 1. One COUNT per status (exact, no row fetch)
   const statusCountPromises = SHIPMENT_STATUSES.map((s) =>
-    (buildBase() as any)
-      .select('shipment_id', { count: 'exact', head: true })
+    buildBase('shipment_id', { count: 'exact', head: true })
       .eq('status', s) as Promise<{ count: number | null; error: unknown }>
   )
 
   // 2. created_at for the past 60 days (trend + previous period)
-  const trendPromise = (buildBase() as any)
-    .select('created_at')
+  const trendPromise = buildBase('created_at')
     .gte('created_at', prevStart.toISOString())
     .lte('created_at', today.toISOString()) as Promise<{ data: Array<{ created_at: string }> | null; error: unknown }>
 
@@ -94,11 +102,15 @@ export async function getDashboardStats(
         .eq('is_approved', false) as any)
     : Promise.resolve({ count: 0 })
 
-  const [statusResults, trendResult, shippersResult, pendingResult] = await Promise.all([
+  const recentTrackingPromise = trackingService.getRecentEvents(isAdmin, accountId, userId, companyRole, 5)
+    .catch(() => [] as unknown[])
+
+  const [statusResults, trendResult, shippersResult, pendingResult, recentTracking] = await Promise.all([
     Promise.all(statusCountPromises),
     trendPromise,
     shippersPromise,
     pendingPromise,
+    recentTrackingPromise,
   ])
 
   // ── Aggregate status counts ───────────────────────────────────────────────
@@ -144,6 +156,7 @@ export async function getDashboardStats(
     activeLoads,
     trend,
     prevPeriodTotal,
+    recentTrackingEvents: recentTracking,
   }
 
   if (isAdmin) {

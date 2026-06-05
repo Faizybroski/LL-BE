@@ -1,3 +1,4 @@
+import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import * as accountsRepo from './accounts.repository'
 import type {
@@ -7,6 +8,7 @@ import type {
   CreateAccountNoteDto,
   UpdateAccountNoteDto,
   UpdateOwnProfileDto,
+  UpdateCompanyLogoDto,
 } from './accounts.schema'
 
 // ── Admin: Accounts ───────────────────────────────────────────────────────────
@@ -69,6 +71,15 @@ export async function updateAccount(id: string, dto: UpdateAccountDto) {
 
   const { data, error } = await accountsRepo.updateById(id, updates)
   if (error || !data) throw AppError.internal('Failed to update account')
+  return data
+}
+
+export async function updateCompanyLogo(accountId: string, dto: UpdateCompanyLogoDto) {
+  const { data, error } = await accountsRepo.updateById(accountId, {
+    logo_url:   dto.logoUrl,
+    updated_at: new Date().toISOString(),
+  })
+  if (error || !data) throw AppError.internal('Failed to update company logo')
   return data
 }
 
@@ -147,10 +158,10 @@ export async function deleteAccountNote(accountId: string, noteId: string) {
   if (error) throw AppError.internal('Failed to delete note')
 }
 
-// ── Shipper: own profile ──────────────────────────────────────────────────────
+// ── Shipper: own account (company) ───────────────────────────────────────────
 export async function getOwnProfile(userId: string) {
-  const { data, error } = await accountsRepo.findProfileById(userId)
-  if (error || !data) throw AppError.notFound('Profile')
+  const { data, error } = await accountsRepo.findAccountByUserId(userId)
+  if (error || !data) throw AppError.notFound('Account')
   return data
 }
 
@@ -162,4 +173,38 @@ export async function updateOwnProfile(userId: string, dto: UpdateOwnProfileDto)
   const { data, error } = await accountsRepo.updateProfileById(userId, updates)
   if (error || !data) throw AppError.internal('Failed to update profile')
   return data
+}
+
+// ── Company logo (company_admin only) ────────────────────────────────────────
+export async function getOwnAccountId(userId: string): Promise<string> {
+  const { data, error } = await accountsRepo.findProfileById(userId)
+  if (error || !data || !data.account_id) throw AppError.notFound('Account')
+  return data.account_id as string
+}
+
+// Returns a signed upload URL so the frontend can push directly to Supabase
+// Storage without needing a Supabase Auth session (the app uses custom JWT).
+export async function getLogoUploadUrl(accountId: string) {
+  const path = `${accountId}/logo.webp`
+  const { data, error } = await supabase.storage
+    .from('company-logos')
+    .createSignedUploadUrl(path)
+  if (error || !data) throw AppError.internal('Failed to generate logo upload URL')
+
+  const { data: pub } = supabase.storage.from('company-logos').getPublicUrl(path)
+  return {
+    signedUrl: data.signedUrl,
+    token:     data.token,
+    path:      data.path,
+    publicUrl: pub.publicUrl,
+  }
+}
+
+export async function removeLogo(accountId: string) {
+  await supabase.storage.from('company-logos').remove([`${accountId}/logo.webp`])
+  const { error } = await accountsRepo.updateById(accountId, {
+    logo_url:   null,
+    updated_at: new Date().toISOString(),
+  })
+  if (error) throw AppError.internal('Failed to clear company logo')
 }

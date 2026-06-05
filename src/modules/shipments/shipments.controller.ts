@@ -8,6 +8,7 @@ import type {
   UpdateShipmentStatusDto,
   DeleteShipmentDto,
   AssignShipmentDto,
+  AssignEmployeeDto,
   ListShipmentsQuery,
 } from './shipments.schema'
 
@@ -21,6 +22,7 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       isAdmin(req),
       req.user!.accountId,
       req.user!.id,
+      req.user!.companyRole,
     )
     paginated(res, shipments, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {
@@ -35,6 +37,7 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
       isAdmin(req),
       req.user!.accountId,
       req.user!.id,
+      req.user!.companyRole,
     )
     ok(res, shipment)
   } catch (err) {
@@ -63,6 +66,7 @@ export async function update(req: Request, res: Response, next: NextFunction): P
       isAdmin(req),
       req.user!.accountId,
       req.user!.id,
+      req.user!.companyRole,
     )
     ok(res, shipment, 'Shipment updated')
   } catch (err) {
@@ -78,6 +82,7 @@ export async function updateStatus(req: Request, res: Response, next: NextFuncti
       req.user!.id,
       isAdmin(req),
       req.user!.accountId,
+      req.user!.companyRole,
     )
     ok(res, shipment, 'Status updated')
   } catch (err) {
@@ -87,12 +92,26 @@ export async function updateStatus(req: Request, res: Response, next: NextFuncti
 
 export async function assign(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const shipment = await shipmentsService.assignToShipper(
+    const shipment = await shipmentsService.assignToCompany(
       param(req, 'id'),
       req.body as AssignShipmentDto,
       req.user!.id,
     )
-    ok(res, shipment, 'Shipper assigned')
+    ok(res, shipment, 'Shipping company assigned')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function assignEmployee(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const shipment = await shipmentsService.assignToEmployee(
+      param(req, 'id'),
+      req.body as AssignEmployeeDto,
+      req.user!.id,
+      req.user!.accountId!,
+    )
+    ok(res, shipment, 'Employee assigned')
   } catch (err) {
     next(err)
   }
@@ -106,6 +125,7 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
       req.user!.id,
       isAdmin(req),
       req.user!.accountId,
+      req.user!.companyRole,
     )
     noContent(res)
   } catch (err) {

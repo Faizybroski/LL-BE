@@ -9,6 +9,7 @@ import type {
   CreateAccountNoteDto,
   UpdateAccountNoteDto,
   UpdateOwnProfileDto,
+  UpdateCompanyLogoDto,
 } from './accounts.schema'
 
 // ── Admin: Accounts ───────────────────────────────────────────────────────────
@@ -129,6 +130,51 @@ export async function updateMyProfile(req: Request, res: Response, next: NextFun
       req.body as UpdateOwnProfileDto,
     )
     ok(res, profile, 'Profile updated')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function myLogoUploadUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const accountId = await accountsService.getOwnAccountId(req.user!.id)
+    const result    = await accountsService.getLogoUploadUrl(accountId)
+    ok(res, result)
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function removeMyLogo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const accountId = await accountsService.getOwnAccountId(req.user!.id)
+    await accountsService.removeLogo(accountId)
+    ok(res, null, 'Company logo removed')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function updateMyCompanyLogo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const accountId = await accountsService.getOwnAccountId(req.user!.id)
+    const account = await accountsService.updateCompanyLogo(
+      accountId,
+      req.body as UpdateCompanyLogoDto,
+    )
+    ok(res, account, 'Company logo updated')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function updateOneCompanyLogo(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const account = await accountsService.updateCompanyLogo(
+      param(req, 'id'),
+      req.body as UpdateCompanyLogoDto,
+    )
+    ok(res, account, 'Company logo updated')
   } catch (err) {
     next(err)
   }

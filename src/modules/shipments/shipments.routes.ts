@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireAdmin } from '../../middleware/role.middleware'
+import { requireAdmin, requireCompanyAdmin } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createShipmentSchema,
@@ -8,6 +8,7 @@ import {
   updateShipmentStatusSchema,
   deleteShipmentSchema,
   assignShipmentSchema,
+  assignEmployeeSchema,
   listShipmentsSchema,
 } from './shipments.schema'
 import * as shipmentsController from './shipments.controller'
@@ -55,7 +56,7 @@ shipmentsRouter.patch(
   shipmentsController.updateStatus,
 )
 
-// ── Assign to shipper (admin only) ────────────────────────────────────────────
+// ── Assign to Shipping Company (admin only) ───────────────────────────────────
 // Shipment must be 'confirmed'; advances status to 'assigned'.
 shipmentsRouter.post(
   '/:id/assign',
@@ -63,4 +64,14 @@ shipmentsRouter.post(
   requireAdmin,
   validate(assignShipmentSchema),
   shipmentsController.assign,
+)
+
+// ── Assign to Employee (company admin only) ───────────────────────────────────
+// Company admin assigns (or unassigns) a load to an employee within their company.
+shipmentsRouter.post(
+  '/:id/assign-employee',
+  authMiddleware,
+  requireCompanyAdmin,
+  validate(assignEmployeeSchema),
+  shipmentsController.assignEmployee,
 )

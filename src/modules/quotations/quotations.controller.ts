@@ -12,6 +12,7 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       req.user!.role,
       req.user!.id,
       req.user!.accountId,
+      req.user!.companyRole,
     )
     paginated(res, quotations, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {
@@ -21,7 +22,13 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
 
 export async function getOne(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const quotation = await service.getQuotation(param(req, 'id'), req.user!.role, req.user!.accountId)
+    const quotation = await service.getQuotation(
+      param(req, 'id'),
+      req.user!.role,
+      req.user!.accountId,
+      req.user!.id,
+      req.user!.companyRole,
+    )
     ok(res, quotation)
   } catch (err) {
     next(err)
@@ -43,6 +50,9 @@ export async function update(req: Request, res: Response, next: NextFunction): P
       param(req, 'id'),
       req.body as UpdateQuotationDto,
       req.user!.role,
+      req.user!.id,
+      req.user!.companyRole,
+      req.user!.accountId,
     )
     ok(res, quotation, 'Quotation updated')
   } catch (err) {
@@ -52,7 +62,13 @@ export async function update(req: Request, res: Response, next: NextFunction): P
 
 export async function remove(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    await service.deleteQuotation(param(req, 'id'), req.user!.role)
+    await service.deleteQuotation(
+      param(req, 'id'),
+      req.user!.role,
+      req.user!.id,
+      req.user!.companyRole,
+      req.user!.accountId,
+    )
     noContent(res)
   } catch (err) {
     next(err)

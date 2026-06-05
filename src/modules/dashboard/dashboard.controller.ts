@@ -9,6 +9,7 @@ export async function getStats(req: Request, res: Response, next: NextFunction):
       isAdmin,
       req.user!.accountId,
       req.user!.id,
+      req.user!.companyRole,
     )
     ok(res, stats)
   } catch (err) {
