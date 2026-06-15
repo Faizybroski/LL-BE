@@ -135,7 +135,8 @@ export async function findAll(
   }
 
   // ── Filters ───────────────────────────────────────────────────────────────
-  if (query.status)        q = q.eq('status', query.status)
+  if (query.statuses)      q = q.in('status', query.statuses.split(',').map(s => s.trim()).filter(Boolean))
+  else if (query.status)   q = q.eq('status', query.status)
   if (query.shipmentType)  q = q.eq('shipment_type', query.shipmentType)
   if (query.createdByRole) q = q.eq('created_by_role', query.createdByRole)
   if (query.dateFrom)      q = q.gte('created_at', query.dateFrom)

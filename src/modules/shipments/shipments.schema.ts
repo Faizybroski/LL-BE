@@ -99,6 +99,7 @@ export const listShipmentsSchema = z.object({
   page:          z.coerce.number().int().positive().default(1),
   limit:         z.coerce.number().int().positive().max(100).default(20),
   status:        z.string().max(100).optional(),
+  statuses:      z.string().max(500).optional(), // comma-separated status list, takes precedence over status
   shipmentType:  z.enum(['freight', 'last_mile']).optional(),
   accountId:     z.string().uuid().optional(),
   search:        z.string().max(100).optional(),
