@@ -77,3 +77,52 @@ export async function touchRefreshToken(tokenId: string) {
     .update({ last_used_at: new Date().toISOString() })
     .eq('token_id', tokenId)
 }
+
+// ── Sessions (active refresh tokens) ─────────────────────────────────────────
+export async function findActiveSessionsByUser(userId: string) {
+  return supabase
+    .from('refresh_tokens')
+    .select('token_id, token_hash, device_info, ip_address, user_agent, created_at, last_used_at, expires_at')
+    .eq('user_id', userId)
+    .eq('is_revoked', false)
+    .gt('expires_at', new Date().toISOString())
+    .order('last_used_at', { ascending: false, nullsFirst: false })
+}
+
+export async function findSessionById(tokenId: string) {
+  return supabase
+    .from('refresh_tokens')
+    .select('token_id, user_id, is_revoked')
+    .eq('token_id', tokenId)
+    .single()
+}
+
+// ── MFA ───────────────────────────────────────────────────────────────────────
+export async function findMfaByUserId(userId: string) {
+  return supabase
+    .from('profiles')
+    .select('mfa_secret, mfa_enabled, mfa_enrolled_at')
+    .eq('id', userId)
+    .single()
+}
+
+export async function setPendingMfaSecret(userId: string, secret: string) {
+  return supabase
+    .from('profiles')
+    .update({ mfa_secret: secret, mfa_enabled: false, mfa_enrolled_at: null })
+    .eq('id', userId)
+}
+
+export async function enableMfa(userId: string) {
+  return supabase
+    .from('profiles')
+    .update({ mfa_enabled: true, mfa_enrolled_at: new Date().toISOString() })
+    .eq('id', userId)
+}
+
+export async function disableMfa(userId: string) {
+  return supabase
+    .from('profiles')
+    .update({ mfa_secret: null, mfa_enabled: false, mfa_enrolled_at: null })
+    .eq('id', userId)
+}

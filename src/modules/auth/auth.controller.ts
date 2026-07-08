@@ -1,7 +1,17 @@
 import { Request, Response, NextFunction } from 'express'
 import * as authService from './auth.service'
 import { ok, created } from '../../lib/response'
-import type { LoginDto, RefreshDto, LogoutDto, RegisterDto, ChangePasswordDto } from './auth.schema'
+import { param } from '../../lib/params'
+import type {
+  LoginDto,
+  RefreshDto,
+  LogoutDto,
+  RegisterDto,
+  ChangePasswordDto,
+  MfaCodeDto,
+  MfaDisableDto,
+  MfaChallengeDto,
+} from './auth.schema'
 
 // ── Context helper ────────────────────────────────────────────────────────────
 // Extracts IP + User-Agent for session metadata.
@@ -77,6 +87,79 @@ export async function changePassword(
       req.body as ChangePasswordDto,
     )
     ok(res, null, result.message)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── POST /api/v1/auth/mfa/challenge ────────────────────────────────────────────
+export async function mfaChallenge(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.mfaChallenge(req.body as MfaChallengeDto, requestContext(req))
+    ok(res, result, 'Login successful')
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── GET /api/v1/auth/mfa/status ────────────────────────────────────────────────
+export async function mfaStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.getMfaStatus(req.user!.id)
+    ok(res, result)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── POST /api/v1/auth/mfa/enroll ───────────────────────────────────────────────
+export async function mfaEnroll(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.enrollMfa(req.user!.id)
+    ok(res, result)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── POST /api/v1/auth/mfa/verify ───────────────────────────────────────────────
+export async function mfaVerify(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.verifyMfaEnrollment(req.user!.id, req.body as MfaCodeDto)
+    ok(res, null, result.message)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── POST /api/v1/auth/mfa/disable ──────────────────────────────────────────────
+export async function mfaDisable(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.disableMfaForUser(req.user!.id, req.body as MfaDisableDto)
+    ok(res, null, result.message)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── GET /api/v1/auth/sessions ───────────────────────────────────────────────────
+// The current session's refresh token is passed via a header (not query string)
+// so it never ends up in server/proxy access logs — used only to flag "this device".
+export async function listSessions(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const currentRefreshToken = req.get('X-Refresh-Token') || undefined
+    const result = await authService.listSessions(req.user!.id, currentRefreshToken)
+    ok(res, result)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── DELETE /api/v1/auth/sessions/:tokenId ──────────────────────────────────────
+export async function revokeSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await authService.revokeSession(req.user!.id, param(req, 'tokenId'))
+    ok(res, null, 'Session revoked')
   } catch (err) {
     next(err)
   }

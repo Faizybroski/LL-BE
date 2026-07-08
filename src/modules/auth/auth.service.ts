@@ -1,15 +1,25 @@
 import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import { env } from '../../lib/env'
-import { signAccessToken } from '../../lib/jwt'
+import { signAccessToken, signMfaChallengeToken, verifyMfaChallengeToken } from '../../lib/jwt'
 import {
   generateRefreshToken,
   hashRefreshToken,
   getRefreshTokenExpiry,
 } from '../../lib/token'
+import { generateTotpSecret, buildProvisioningQrCode, verifyTotpCode } from '../../lib/totp'
 import * as authRepo from './auth.repository'
 import { logger } from '../../lib/logger'
-import type { LoginDto, RefreshDto, LogoutDto, RegisterDto, ChangePasswordDto } from './auth.schema'
+import type {
+  LoginDto,
+  RefreshDto,
+  LogoutDto,
+  RegisterDto,
+  ChangePasswordDto,
+  MfaCodeDto,
+  MfaDisableDto,
+  MfaChallengeDto,
+} from './auth.schema'
 import type { UserRole, CompanyRole } from '../../middleware/auth.middleware'
 
 // Converts JWT duration strings ("15m", "1h", "30s") to seconds for the API response.
@@ -88,7 +98,7 @@ export async function login(
   // and should not be extended with application-level attributes.
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role, company_role, full_name, avatar_url, is_active, account_id')
+    .select('role, company_role, full_name, avatar_url, is_active, account_id, mfa_enabled')
     .eq('id', data.user.id)
     .single()
 
@@ -101,10 +111,19 @@ export async function login(
     throw AppError.forbidden('Account has been deactivated')
   }
 
+  // MFA is enabled — withhold tokens until the second factor is verified.
+  if (profile.mfa_enabled) {
+    return {
+      mfaRequired: true as const,
+      challengeToken: signMfaChallengeToken(data.user.id),
+    }
+  }
+
   const companyRole = (profile.company_role ?? null) as CompanyRole
   const tokens = await issueTokenPair(data.user.id, data.user.email!, profile.role as UserRole, profile.account_id, companyRole, context)
 
   return {
+    mfaRequired: false as const,
     ...tokens,
     user: {
       id:          data.user.id,
@@ -115,6 +134,140 @@ export async function login(
       avatarUrl:   profile.avatar_url ?? null,
       accountId:   profile.account_id,
     },
+  }
+}
+
+// ── POST /auth/mfa/challenge ────────────────────────────────────────────────────
+// Second step of login: exchanges a valid challengeToken + TOTP code for a full token pair.
+export async function mfaChallenge(
+  dto: MfaChallengeDto,
+  context: { ipAddress?: string; userAgent?: string },
+) {
+  const { sub: userId } = verifyMfaChallengeToken(dto.challengeToken)
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('role, company_role, is_active, account_id, mfa_secret, mfa_enabled')
+    .eq('id', userId)
+    .single()
+
+  if (profileError || !profile) throw AppError.unauthorized('User not found')
+  if (!profile.is_active) throw AppError.forbidden('Account has been deactivated')
+  if (!profile.mfa_enabled || !profile.mfa_secret) {
+    throw AppError.badRequest('MFA is not enabled for this account')
+  }
+
+  const { data: authUser } = await supabase.auth.admin.getUserById(userId)
+  const email = authUser.user?.email ?? ''
+
+  if (!verifyTotpCode(email, profile.mfa_secret, dto.code)) {
+    throw AppError.unauthorized('Invalid verification code')
+  }
+
+  const companyRole = (profile.company_role ?? null) as CompanyRole
+  const tokens = await issueTokenPair(userId, email, profile.role as UserRole, profile.account_id, companyRole, context)
+
+  return {
+    ...tokens,
+    user: {
+      id:          userId,
+      email,
+      role:        profile.role,
+      companyRole: profile.company_role ?? null,
+      fullName:    authUser.user?.user_metadata?.full_name ?? null,
+      avatarUrl:   null,
+      accountId:   profile.account_id,
+    },
+  }
+}
+
+// ── MFA enrollment (Security settings) ────────────────────────────────────────
+export async function enrollMfa(userId: string) {
+  const { data: authUser } = await supabase.auth.admin.getUserById(userId)
+  if (!authUser.user?.email) throw AppError.notFound('User')
+
+  const secret = generateTotpSecret()
+  const { error } = await authRepo.setPendingMfaSecret(userId, secret)
+  if (error) throw AppError.internal('Failed to start MFA enrollment')
+
+  const { otpauthUrl, qrCodeDataUrl } = await buildProvisioningQrCode(authUser.user.email, secret)
+  return { secret, otpauthUrl, qrCodeDataUrl }
+}
+
+export async function verifyMfaEnrollment(userId: string, dto: MfaCodeDto) {
+  const { data: authUser } = await supabase.auth.admin.getUserById(userId)
+  if (!authUser.user?.email) throw AppError.notFound('User')
+
+  const { data: profile, error } = await authRepo.findMfaByUserId(userId)
+  if (error || !profile?.mfa_secret) throw AppError.badRequest('MFA enrollment has not been started')
+
+  if (!verifyTotpCode(authUser.user.email, profile.mfa_secret, dto.code)) {
+    throw AppError.unauthorized('Invalid verification code')
+  }
+
+  const { error: enableError } = await authRepo.enableMfa(userId)
+  if (enableError) throw AppError.internal('Failed to enable MFA')
+
+  return { message: 'MFA enabled' }
+}
+
+export async function disableMfaForUser(userId: string, dto: MfaDisableDto) {
+  const { data: authUser } = await supabase.auth.admin.getUserById(userId)
+  if (!authUser.user?.email) throw AppError.notFound('User')
+
+  const { error: verifyError } = await supabase.auth.signInWithPassword({
+    email: authUser.user.email,
+    password: dto.password,
+  })
+  if (verifyError) throw AppError.unauthorized('Password is incorrect')
+
+  const { data: profile, error } = await authRepo.findMfaByUserId(userId)
+  if (error || !profile?.mfa_enabled || !profile.mfa_secret) {
+    throw AppError.badRequest('MFA is not enabled for this account')
+  }
+
+  if (!verifyTotpCode(authUser.user.email, profile.mfa_secret, dto.code)) {
+    throw AppError.unauthorized('Invalid verification code')
+  }
+
+  const { error: disableError } = await authRepo.disableMfa(userId)
+  if (disableError) throw AppError.internal('Failed to disable MFA')
+
+  return { message: 'MFA disabled' }
+}
+
+export async function getMfaStatus(userId: string) {
+  const { data, error } = await authRepo.findMfaByUserId(userId)
+  if (error || !data) throw AppError.notFound('User')
+  return { enabled: data.mfa_enabled, enrolledAt: data.mfa_enrolled_at }
+}
+
+// ── Sessions ───────────────────────────────────────────────────────────────────
+export async function listSessions(userId: string, currentRefreshToken?: string) {
+  const { data, error } = await authRepo.findActiveSessionsByUser(userId)
+  if (error) throw AppError.internal('Failed to fetch sessions')
+
+  const currentHash = currentRefreshToken ? hashRefreshToken(currentRefreshToken) : null
+
+  return (data ?? []).map((session) => ({
+    tokenId:    session.token_id,
+    deviceInfo: session.device_info,
+    ipAddress:  session.ip_address,
+    userAgent:  session.user_agent,
+    createdAt:  session.created_at,
+    lastUsedAt: session.last_used_at,
+    expiresAt:  session.expires_at,
+    isCurrent:  currentHash !== null && session.token_hash === currentHash,
+  }))
+}
+
+export async function revokeSession(userId: string, tokenId: string) {
+  const { data: session, error } = await authRepo.findSessionById(tokenId)
+  if (error || !session || session.user_id !== userId) {
+    throw AppError.notFound('Session')
+  }
+  if (!session.is_revoked) {
+    await authRepo.revokeRefreshToken(tokenId)
   }
 }
 

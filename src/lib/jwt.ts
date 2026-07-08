@@ -46,6 +46,40 @@ export function verifyAccessToken(token: string): JwtPayload {
   }
 }
 
+// ── MFA challenge token ────────────────────────────────────────────────────────
+// Issued after password verification when the account has MFA enabled. Short-lived
+// (5 min) and distinct from the access token (typ claim) so it can never be used
+// to authenticate API requests — only to complete the MFA challenge step.
+export interface MfaChallengePayload {
+  sub: string
+  typ: 'mfa_challenge'
+  iat: number
+  exp: number
+}
+
+export function signMfaChallengeToken(userId: string): string {
+  return jwt.sign({ sub: userId, typ: 'mfa_challenge' }, env.JWT_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: '5m',
+  })
+}
+
+export function verifyMfaChallengeToken(token: string): MfaChallengePayload {
+  let payload: MfaChallengePayload
+  try {
+    payload = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as MfaChallengePayload
+  } catch (err) {
+    if (err instanceof jwt.TokenExpiredError) {
+      throw AppError.unauthorized('MFA challenge has expired — please log in again')
+    }
+    throw AppError.unauthorized('Invalid MFA challenge token')
+  }
+  if (payload.typ !== 'mfa_challenge') {
+    throw AppError.unauthorized('Invalid MFA challenge token')
+  }
+  return payload
+}
+
 // ── Decode without verification ───────────────────────────────────────────────
 // ONLY for extracting user ID from an expired token during refresh flows.
 // NEVER use the payload for authorization decisions.

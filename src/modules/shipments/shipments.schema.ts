@@ -108,7 +108,7 @@ export const listShipmentsSchema = z.object({
   dateTo:        z.string().max(30).optional(),
   updatedFrom:   z.string().max(30).optional(),
   updatedTo:     z.string().max(30).optional(),
-  sortBy:        z.enum(['load_number', 'status', 'shipment_type', 'created_at', 'updated_at']).optional(),
+  sortBy:        z.enum(['load_number', 'status', 'shipment_type', 'created_at', 'updated_at', 'estimated_delivery_date']).optional(),
   sortDir:       z.enum(['asc', 'desc']).optional(),
 })
 

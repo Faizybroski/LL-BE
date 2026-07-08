@@ -10,6 +10,7 @@ import type {
   UpdateAccountNoteDto,
   UpdateOwnProfileDto,
   UpdateCompanyLogoDto,
+  UpdateOwnCompanyDto,
 } from './accounts.schema'
 
 // ── Admin: Accounts ───────────────────────────────────────────────────────────
@@ -130,6 +131,18 @@ export async function updateMyProfile(req: Request, res: Response, next: NextFun
       req.body as UpdateOwnProfileDto,
     )
     ok(res, profile, 'Profile updated')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function updateMyCompany(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const account = await accountsService.updateOwnCompany(
+      req.user!.id,
+      req.body as UpdateOwnCompanyDto,
+    )
+    ok(res, account, 'Company profile updated')
   } catch (err) {
     next(err)
   }

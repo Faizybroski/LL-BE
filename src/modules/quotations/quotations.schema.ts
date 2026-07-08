@@ -70,7 +70,17 @@ export const listQuotationsQuerySchema = z.object({
 
 export const generatePdfSchema = z.object({})
 
+// ── Accept / Decline (customer workflow) ──────────────────────────────────────
+// acknowledged must literally be `true` — this is the server-side enforcement
+// of the mandatory Terms & Conditions checkbox; the request fails validation
+// if the client didn't set it, so acceptance can never be recorded without it.
+export const acceptQuotationSchema = z.object({
+  termsVersion: z.string().min(1, 'Terms version is required'),
+  acknowledged: z.literal(true, { message: 'You must acknowledge the Terms & Conditions' }),
+})
+
 export type CreateQuotationDto   = z.infer<typeof createQuotationSchema>
 export type UpdateQuotationDto   = z.infer<typeof updateQuotationSchema>
 export type ListQuotationsQuery  = z.infer<typeof listQuotationsQuerySchema>
 export type QuotationLineItemDto = z.infer<typeof lineItemSchema>
+export type AcceptQuotationDto   = z.infer<typeof acceptQuotationSchema>

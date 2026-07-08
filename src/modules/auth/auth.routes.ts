@@ -8,6 +8,9 @@ import {
   refreshSchema,
   logoutSchema,
   changePasswordSchema,
+  mfaCodeSchema,
+  mfaDisableSchema,
+  mfaChallengeSchema,
 } from './auth.schema'
 import * as authController from './auth.controller'
 
@@ -22,6 +25,14 @@ authRouter.post('/register', authLimiter, validate(registerSchema), authControll
 // A separate tighter limiter can be added here if token farming becomes a concern.
 authRouter.post('/refresh', validate(refreshSchema), authController.refresh)
 
+// Second step of login when MFA is enabled — rate-limited like login itself.
+authRouter.post(
+  '/mfa/challenge',
+  authLimiter,
+  validate(mfaChallengeSchema),
+  authController.mfaChallenge,
+)
+
 // ── Protected endpoints (require valid access token) ──────────────────────────
 authRouter.get('/me', authMiddleware, authController.me)
 
@@ -35,3 +46,13 @@ authRouter.post(
   validate(changePasswordSchema),
   authController.changePassword,
 )
+
+// ── MFA (Security settings) ────────────────────────────────────────────────────
+authRouter.get('/mfa/status', authMiddleware, authController.mfaStatus)
+authRouter.post('/mfa/enroll', authMiddleware, authController.mfaEnroll)
+authRouter.post('/mfa/verify', authMiddleware, validate(mfaCodeSchema), authController.mfaVerify)
+authRouter.post('/mfa/disable', authMiddleware, validate(mfaDisableSchema), authController.mfaDisable)
+
+// ── Sessions ────────────────────────────────────────────────────────────────────
+authRouter.get('/sessions', authMiddleware, authController.listSessions)
+authRouter.delete('/sessions/:tokenId', authMiddleware, authController.revokeSession)

@@ -1,13 +1,17 @@
 import { Request, Response, NextFunction } from 'express'
 import * as notificationsService from './notifications.service'
 import { ok, noContent, parsePagination } from '../../lib/response'
-import type { MarkReadDto } from './notifications.schema'
+import { NOTIFICATION_CATEGORIES, type MarkReadDto, type NotificationCategory } from './notifications.schema'
 
 export async function list(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { page, limit } = parsePagination(req.query)
     const unreadOnly = req.query['unreadOnly'] === 'true'
-    const result = await notificationsService.getMyNotifications(req.user!.id, page, limit, unreadOnly)
+    const categoryParam = req.query['category']
+    const category = typeof categoryParam === 'string' && categoryParam in NOTIFICATION_CATEGORIES
+      ? (categoryParam as NotificationCategory)
+      : undefined
+    const result = await notificationsService.getMyNotifications(req.user!.id, page, limit, unreadOnly, category)
     res.status(200).json({
       success: true,
       data: result.notifications,

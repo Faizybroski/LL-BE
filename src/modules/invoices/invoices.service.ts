@@ -1,8 +1,22 @@
 import { AppError } from '../../lib/errors'
 import * as repo from './invoices.repository'
 import * as quotationsRepo from '../quotations/quotations.repository'
+import * as notificationsService from '../notifications/notifications.service'
 import { generateAndUploadInvoicePdf } from '../../services/pdf.service'
 import type { CreateInvoiceDto, UpdateInvoiceDto, ListInvoicesQuery } from './invoices.schema'
+
+// Fire-and-forget — notifications must never block the main operation.
+function notifyUser(
+  userId:   string,
+  type:     'invoice_issued' | 'invoice_paid' | 'invoice_overdue',
+  title:    string,
+  body:     string,
+  entityId: string,
+): void {
+  void notificationsService
+    .createNotification({ userId, type, title, body, entityType: 'invoice', entityId })
+    .catch(() => undefined)
+}
 
 function computeTotals(
   items: { quantity: number; unit_price: number }[],
@@ -184,6 +198,17 @@ export async function updateInvoice(
   if (dto.items !== undefined) {
     const rows = itemsToRows(id, items as CreateInvoiceDto['items'])
     await repo.upsertItems(id, rows)
+  }
+
+  if (dto.status !== undefined && dto.status !== existing.status) {
+    const invoiceNumber = updated.invoice_number as string
+    if (dto.status === 'unpaid') {
+      notifyUser(existing.profile_id as string, 'invoice_issued', 'New invoice issued', `Invoice ${invoiceNumber} is ready.`, id)
+    } else if (dto.status === 'paid') {
+      notifyUser(existing.profile_id as string, 'invoice_paid', 'Invoice paid', `Invoice ${invoiceNumber} has been paid.`, id)
+    } else if (dto.status === 'overdue') {
+      notifyUser(existing.profile_id as string, 'invoice_overdue', 'Invoice overdue', `Invoice ${invoiceNumber} is now overdue.`, id)
+    }
   }
 
   const { data: full } = await repo.findById(id)

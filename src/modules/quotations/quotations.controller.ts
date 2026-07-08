@@ -2,7 +2,29 @@ import { Request, Response, NextFunction } from 'express'
 import * as service from './quotations.service'
 import { ok, created, noContent, paginated, parsePagination } from '../../lib/response'
 import { param } from '../../lib/params'
-import type { CreateQuotationDto, UpdateQuotationDto, ListQuotationsQuery } from './quotations.schema'
+import type { CreateQuotationDto, UpdateQuotationDto, ListQuotationsQuery, AcceptQuotationDto } from './quotations.schema'
+
+// IP + User-Agent for the acceptance audit trail — mirrors auth.controller's requestContext.
+function requestContext(req: Request) {
+  return {
+    ipAddress: (req.ip ?? req.socket.remoteAddress) as string | undefined,
+    userAgent: req.get('User-Agent'),
+  }
+}
+
+export async function stats(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await service.getQuotationStats(
+      req.user!.role,
+      req.user!.id,
+      req.user!.accountId,
+      req.user!.companyRole,
+    )
+    ok(res, result)
+  } catch (err) {
+    next(err)
+  }
+}
 
 export async function list(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -88,6 +110,38 @@ export async function generatePdf(req: Request, res: Response, next: NextFunctio
   try {
     const result = await service.generatePdf(param(req, 'id'))
     ok(res, result, 'PDF generated')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function accept(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const quotation = await service.acceptQuotation(
+      param(req, 'id'),
+      req.body as AcceptQuotationDto,
+      req.user!.id,
+      req.user!.role,
+      req.user!.companyRole,
+      req.user!.accountId,
+      requestContext(req),
+    )
+    ok(res, quotation, 'Quotation accepted')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function decline(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const quotation = await service.declineQuotation(
+      param(req, 'id'),
+      req.user!.id,
+      req.user!.role,
+      req.user!.companyRole,
+      req.user!.accountId,
+    )
+    ok(res, quotation, 'Quotation declined')
   } catch (err) {
     next(err)
   }

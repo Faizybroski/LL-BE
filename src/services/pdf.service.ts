@@ -410,3 +410,90 @@ export async function generateAndUploadInvoicePdf(data: InvoiceData): Promise<st
 
   return uploadToStorage(buffer, `invoices/${data.id}.pdf`)
 }
+
+// ── Terms & Conditions PDF ──────────────────────────────────────────────────────
+// Static legal document, not tied to a specific quotation/invoice — generated
+// on demand for the "Download PDF" action in the acceptance modal, never stored.
+
+export const TERMS_VERSION = '1.0'
+
+const TERMS_SECTIONS: { heading: string; body: string }[] = [
+  {
+    heading: '1. Agreement',
+    body: 'By accepting a quotation, the Client agrees to these Terms and Conditions.',
+  },
+  {
+    heading: '2. Definitions',
+    body: '"Company" refers to the service provider. "Client" refers to the party accepting the quotation. "Services" refers to all work described in the quotation.',
+  },
+  {
+    heading: '3. Scope of Services',
+    body: 'Services are limited strictly to the accepted quotation. Any additional work requires written approval and may incur additional charges.',
+  },
+  {
+    heading: '4. Pricing & Payment',
+    body: 'Pricing is as stated in the quotation. Payment terms apply as specified. Late payments may result in suspension of services.',
+  },
+  {
+    heading: '5. Changes & Cancellations',
+    body: 'Any changes or cancellations may result in charges for work already performed or committed resources.',
+  },
+  {
+    heading: '6. Client Responsibilities',
+    body: 'The Client is responsible for providing accurate information and ensuring compliance of any goods, instructions, or data provided for execution of services.',
+  },
+  {
+    heading: '7. Liability',
+    body: 'To the maximum extent permitted by applicable law, total liability is limited to the amount paid for the specific quotation. The Company is not liable for indirect, incidental, or consequential damages.',
+  },
+  {
+    heading: '8. No Warranty',
+    body: 'Services are provided without warranties of any kind unless expressly stated in writing.',
+  },
+  {
+    heading: '9. Force Majeure',
+    body: 'The Company is not liable for delays or failure caused by events beyond reasonable control.',
+  },
+  {
+    heading: '10. Data & Audit Records',
+    body: 'The Company may record acceptance details including user identity, company, timestamp, IP address, and Terms version for audit and compliance purposes.',
+  },
+  {
+    heading: '11. Intellectual Property',
+    body: 'Unless otherwise agreed in writing, all Company systems, methods, and materials remain the property of the Company.',
+  },
+  {
+    heading: '12. Governing Law',
+    body: 'These Terms are governed by the laws of Ontario and Canada.',
+  },
+  {
+    heading: '13. Entire Agreement',
+    body: 'These Terms, together with the accepted quotation, constitute the entire agreement between the parties.',
+  },
+]
+
+export async function generateTermsPdfBuffer(): Promise<Buffer> {
+  return buildPdfBuffer((doc) => {
+    const width = PAGE_W - MARGIN * 2
+    let y = MARGIN
+
+    doc.fillColor(DARK).font('Helvetica-Bold').fontSize(16)
+      .text('LOGICAL LINKS MASTER TERMS & CONDITIONS', MARGIN, y, { width })
+    y = doc.y + 6
+
+    doc.fillColor(GREY).font('Helvetica').fontSize(9)
+      .text(`Version: ${TERMS_VERSION}    Effective Date: June 23, 2026`, MARGIN, y, { width })
+    y = doc.y + 20
+
+    for (const section of TERMS_SECTIONS) {
+      if (y > PAGE_H - 100) {
+        doc.addPage()
+        y = MARGIN
+      }
+      doc.fillColor(DARK).font('Helvetica-Bold').fontSize(11).text(section.heading, MARGIN, y, { width })
+      y = doc.y + 4
+      doc.fillColor(DARK).font('Helvetica').fontSize(9.5).text(section.body, MARGIN, y, { width, lineGap: 2 })
+      y = doc.y + 14
+    }
+  })
+}

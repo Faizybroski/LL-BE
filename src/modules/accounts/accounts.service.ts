@@ -9,7 +9,13 @@ import type {
   UpdateAccountNoteDto,
   UpdateOwnProfileDto,
   UpdateCompanyLogoDto,
+  UpdateOwnCompanyDto,
 } from './accounts.schema'
+
+// Empty strings from the frontend (a cleared input) mean "clear this field".
+function blankToNull(value: string | undefined): string | null | undefined {
+  return value === '' ? null : value
+}
 
 // ── Admin: Accounts ───────────────────────────────────────────────────────────
 export async function listAccounts(query: ListAccountsQuery) {
@@ -28,9 +34,17 @@ export async function createAccount(dto: CreateAccountDto, createdBy: string) {
   const { data, error } = await accountsRepo.create({
     account_name:     dto.accountName,
     abn:              dto.abn,
+    website:          dto.website,
     contact_name:     dto.contactName,
     contact_email:    dto.contactEmail,
     contact_phone:    dto.contactPhone,
+    address_line1:    dto.addressLine1,
+    address_city:     dto.addressCity,
+    address_state:    dto.addressState,
+    address_postcode: dto.addressPostcode,
+    address_country:  dto.addressCountry,
+    billing_email:          dto.billingEmail,
+    accounts_payable_email: dto.accountsPayableEmail,
     billing_address:  dto.billingAddress,
     billing_city:     dto.billingCity,
     billing_state:    dto.billingState,
@@ -57,9 +71,17 @@ export async function updateAccount(id: string, dto: UpdateAccountDto) {
   const updates: Record<string, unknown> = {}
   if (dto.accountName     !== undefined) updates.account_name     = dto.accountName
   if (dto.abn             !== undefined) updates.abn              = dto.abn
+  if (dto.website         !== undefined) updates.website          = dto.website
   if (dto.contactName     !== undefined) updates.contact_name     = dto.contactName
   if (dto.contactEmail    !== undefined) updates.contact_email    = dto.contactEmail
   if (dto.contactPhone    !== undefined) updates.contact_phone    = dto.contactPhone
+  if (dto.addressLine1    !== undefined) updates.address_line1    = dto.addressLine1
+  if (dto.addressCity     !== undefined) updates.address_city     = dto.addressCity
+  if (dto.addressState    !== undefined) updates.address_state    = dto.addressState
+  if (dto.addressPostcode !== undefined) updates.address_postcode = dto.addressPostcode
+  if (dto.addressCountry  !== undefined) updates.address_country  = dto.addressCountry
+  if (dto.billingEmail          !== undefined) updates.billing_email          = dto.billingEmail
+  if (dto.accountsPayableEmail  !== undefined) updates.accounts_payable_email = dto.accountsPayableEmail
   if (dto.billingAddress  !== undefined) updates.billing_address  = dto.billingAddress
   if (dto.billingCity     !== undefined) updates.billing_city     = dto.billingCity
   if (dto.billingState    !== undefined) updates.billing_state    = dto.billingState
@@ -172,6 +194,32 @@ export async function updateOwnProfile(userId: string, dto: UpdateOwnProfileDto)
 
   const { data, error } = await accountsRepo.updateProfileById(userId, updates)
   if (error || !data) throw AppError.internal('Failed to update profile')
+  return data
+}
+
+// Company info/contacts self-service update — company_admin only, scoped to
+// their own account. Commercial terms (credit limit, payment terms, isActive)
+// are intentionally excluded and remain admin-managed.
+export async function updateOwnCompany(userId: string, dto: UpdateOwnCompanyDto) {
+  const accountId = await getOwnAccountId(userId)
+
+  const updates: Record<string, unknown> = {}
+  if (dto.accountName          !== undefined) updates.account_name           = dto.accountName
+  if (dto.abn                  !== undefined) updates.abn                    = dto.abn
+  if (dto.website               !== undefined) updates.website                = blankToNull(dto.website)
+  if (dto.addressLine1          !== undefined) updates.address_line1          = dto.addressLine1
+  if (dto.addressCity           !== undefined) updates.address_city           = dto.addressCity
+  if (dto.addressState          !== undefined) updates.address_state          = dto.addressState
+  if (dto.addressPostcode       !== undefined) updates.address_postcode       = dto.addressPostcode
+  if (dto.addressCountry        !== undefined) updates.address_country        = dto.addressCountry
+  if (dto.contactName           !== undefined) updates.contact_name           = dto.contactName
+  if (dto.contactEmail          !== undefined) updates.contact_email          = blankToNull(dto.contactEmail)
+  if (dto.contactPhone          !== undefined) updates.contact_phone          = dto.contactPhone
+  if (dto.billingEmail          !== undefined) updates.billing_email          = blankToNull(dto.billingEmail)
+  if (dto.accountsPayableEmail  !== undefined) updates.accounts_payable_email = blankToNull(dto.accountsPayableEmail)
+
+  const { data, error } = await accountsRepo.updateById(accountId, updates)
+  if (error || !data) throw AppError.internal('Failed to update company profile')
   return data
 }
 

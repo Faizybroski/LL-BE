@@ -53,9 +53,31 @@ export const changePasswordSchema = z
     path: ['confirmPassword'],
   })
 
+// ── POST /auth/mfa/verify ──────────────────────────────────────────────────────
+// Confirms enrollment by proving the user's authenticator app is correctly synced.
+export const mfaCodeSchema = z.object({
+  code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+})
+
+// ── POST /auth/mfa/disable ─────────────────────────────────────────────────────
+export const mfaDisableSchema = z.object({
+  password: z.string().min(1, 'Password is required'),
+  code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+})
+
+// ── POST /auth/mfa/challenge ────────────────────────────────────────────────────
+// Second step of login when the account has MFA enabled.
+export const mfaChallengeSchema = z.object({
+  challengeToken: z.string().min(1, 'Challenge token is required'),
+  code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+})
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type LoginDto = z.infer<typeof loginSchema>
 export type RefreshDto = z.infer<typeof refreshSchema>
 export type LogoutDto = z.infer<typeof logoutSchema>
 export type RegisterDto = z.infer<typeof registerSchema>
 export type ChangePasswordDto = z.infer<typeof changePasswordSchema>
+export type MfaCodeDto = z.infer<typeof mfaCodeSchema>
+export type MfaDisableDto = z.infer<typeof mfaDisableSchema>
+export type MfaChallengeDto = z.infer<typeof mfaChallengeSchema>

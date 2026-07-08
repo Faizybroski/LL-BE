@@ -1,7 +1,22 @@
+import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import * as repo from './quotations.repository'
+import * as notificationsService from '../notifications/notifications.service'
 import { generateAndUploadQuotationPdf } from '../../services/pdf.service'
-import type { CreateQuotationDto, UpdateQuotationDto, ListQuotationsQuery } from './quotations.schema'
+import type { CreateQuotationDto, UpdateQuotationDto, ListQuotationsQuery, AcceptQuotationDto } from './quotations.schema'
+
+// Fire-and-forget — notifications must never block the main operation.
+function notifyUser(
+  userId:   string,
+  type:     'quotation_sent' | 'quotation_accepted' | 'quotation_rejected',
+  title:    string,
+  body:     string,
+  entityId: string,
+): void {
+  void notificationsService
+    .createNotification({ userId, type, title, body, entityType: 'quotation', entityId })
+    .catch(() => undefined)
+}
 
 function computeTotals(items: { quantity: number; unit_price: number }[], discount: number, taxRate: number) {
   const subtotal = items.reduce((sum, i) => sum + i.quantity * i.unit_price, 0)
@@ -17,11 +32,25 @@ export async function listQuotations(
   callerAccountId?: string | null,
   companyRole?: string | null,
 ) {
-  const accountId  = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
-  const employeeId = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
-  const { data, count, error } = await repo.findAll(query, accountId, employeeId)
+  const accountId    = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
+  const employeeId   = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
+  // Customers never see internal drafts — only quotations that have been issued to them.
+  const excludeDraft = callerRole === 'shipper'
+  const { data, count, error } = await repo.findAll(query, accountId, employeeId, excludeDraft)
   if (error) throw AppError.internal('Failed to fetch quotations')
   return { quotations: data ?? [], total: count ?? 0 }
+}
+
+export async function getQuotationStats(
+  callerRole: string,
+  callerId: string,
+  callerAccountId?: string | null,
+  companyRole?: string | null,
+) {
+  const accountId    = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
+  const employeeId   = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
+  const excludeDraft = callerRole === 'shipper'
+  return repo.getStats(accountId, employeeId, excludeDraft)
 }
 
 export async function getQuotation(
@@ -36,6 +65,8 @@ export async function getQuotation(
 
   if (callerRole === 'shipper') {
     if (!callerAccountId) throw AppError.forbidden()
+    // Customers never see internal drafts — treat as not found, same as any other doc they can't access.
+    if (data.status === 'draft') throw AppError.notFound('Quotation')
 
     if (companyRole === 'employee' && callerId) {
       if (!data.load_id || !(await repo.loadBelongsToEmployee(data.load_id, callerId))) {
@@ -172,6 +203,119 @@ export async function updateQuotation(
     }))
     await repo.upsertItems(id, rows)
   }
+
+  if (dto.status !== undefined && dto.status !== existing.status) {
+    const quotationNumber = updated.quotation_number as string
+    if (dto.status === 'sent') {
+      notifyUser(existing.profile_id as string, 'quotation_sent', 'New quotation received', `Quotation ${quotationNumber} is ready for review.`, id)
+    } else if (dto.status === 'accepted') {
+      notifyUser(existing.profile_id as string, 'quotation_accepted', 'Quotation accepted', `Quotation ${quotationNumber} has been accepted.`, id)
+    } else if (dto.status === 'rejected') {
+      notifyUser(existing.profile_id as string, 'quotation_rejected', 'Quotation rejected', `Quotation ${quotationNumber} has been rejected.`, id)
+    }
+  }
+
+  const { data: full } = await repo.findById(id)
+  return full
+}
+
+// Shared by accept/decline — same membership check used elsewhere in this module.
+async function assertCustomerCanActOn(
+  quotation: { load_id: string | null; profile_id: string },
+  callerId: string,
+  companyRole: string | null | undefined,
+  callerAccountId: string | null | undefined,
+): Promise<void> {
+  if (companyRole === 'employee') {
+    if (!quotation.load_id || !(await repo.loadBelongsToEmployee(quotation.load_id, callerId))) {
+      throw AppError.forbidden()
+    }
+  } else if (companyRole === 'company_admin' && callerAccountId) {
+    if (!(await repo.documentBelongsToCompany(quotation.load_id, quotation.profile_id, callerAccountId))) {
+      throw AppError.forbidden()
+    }
+  } else {
+    throw AppError.forbidden()
+  }
+}
+
+async function acceptanceIdentity(userId: string, accountId: string | null | undefined) {
+  const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', userId).single()
+  let companyName: string | null = null
+  if (accountId) {
+    const { data: account } = await supabase.from('accounts').select('account_name').eq('account_id', accountId).single()
+    companyName = account?.account_name ?? null
+  }
+  return { fullName: (profile?.full_name as string | null) ?? null, companyName }
+}
+
+// ── POST /:id/accept ──────────────────────────────────────────────────────────
+export async function acceptQuotation(
+  id: string,
+  dto: AcceptQuotationDto,
+  callerId: string,
+  callerRole: string,
+  companyRole: string | null | undefined,
+  callerAccountId: string | null | undefined,
+  context: { ipAddress?: string; userAgent?: string },
+) {
+  if (callerRole !== 'shipper') throw AppError.forbidden('Only customers can accept quotations')
+
+  const { data: existing } = await repo.findById(id)
+  if (!existing || existing.status === 'draft') throw AppError.notFound('Quotation')
+
+  await assertCustomerCanActOn(existing, callerId, companyRole, callerAccountId)
+
+  if (existing.status === 'accepted') throw AppError.conflict('Quotation has already been accepted')
+  if (existing.status === 'rejected') throw AppError.conflict('Quotation has already been declined')
+  if (existing.status !== 'sent') throw AppError.unprocessable('Only quotations awaiting review can be accepted')
+
+  const today = new Date().toISOString().slice(0, 10)
+  if (existing.expiry_date && (existing.expiry_date as string) < today) {
+    throw AppError.unprocessable('This quotation has expired and can no longer be accepted')
+  }
+
+  const acceptedAt = new Date().toISOString()
+  const { error: updateError } = await repo.update(id, { status: 'accepted', accepted_at: acceptedAt })
+  if (updateError) throw AppError.internal('Failed to accept quotation')
+
+  const { fullName, companyName } = await acceptanceIdentity(callerId, callerAccountId)
+  const { error: acceptError } = await repo.createAcceptance({
+    quotation_id:  id,
+    user_id:       callerId,
+    full_name:     fullName,
+    company_name:  companyName,
+    ip_address:    context.ipAddress ?? null,
+    user_agent:    context.userAgent ?? null,
+    terms_version: dto.termsVersion,
+  })
+  if (acceptError) throw AppError.internal('Failed to record acceptance')
+
+  const { data: full } = await repo.findById(id)
+  return full
+}
+
+// ── POST /:id/decline ─────────────────────────────────────────────────────────
+export async function declineQuotation(
+  id: string,
+  callerId: string,
+  callerRole: string,
+  companyRole: string | null | undefined,
+  callerAccountId: string | null | undefined,
+) {
+  if (callerRole !== 'shipper') throw AppError.forbidden('Only customers can decline quotations')
+
+  const { data: existing } = await repo.findById(id)
+  if (!existing || existing.status === 'draft') throw AppError.notFound('Quotation')
+
+  await assertCustomerCanActOn(existing, callerId, companyRole, callerAccountId)
+
+  if (existing.status === 'accepted') throw AppError.conflict('Quotation has already been accepted')
+  if (existing.status === 'rejected') throw AppError.conflict('Quotation has already been declined')
+  if (existing.status !== 'sent') throw AppError.unprocessable('Only quotations awaiting review can be declined')
+
+  const { error } = await repo.update(id, { status: 'rejected', declined_at: new Date().toISOString() })
+  if (error) throw AppError.internal('Failed to decline quotation')
 
   const { data: full } = await repo.findById(id)
   return full

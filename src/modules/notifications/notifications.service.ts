@@ -1,5 +1,6 @@
 import { AppError } from '../../lib/errors'
 import * as notificationsRepo from './notifications.repository'
+import { NOTIFICATION_CATEGORIES, type NotificationCategory } from './notifications.schema'
 import type { CreateNotificationDto, MarkReadDto } from './notifications.schema'
 
 export async function getMyNotifications(
@@ -7,8 +8,10 @@ export async function getMyNotifications(
   page: number,
   limit: number,
   unreadOnly: boolean,
+  category?: NotificationCategory,
 ) {
-  const { data, count, error } = await notificationsRepo.findByUser(userId, page, limit, unreadOnly)
+  const types = category ? NOTIFICATION_CATEGORIES[category] : undefined
+  const { data, count, error } = await notificationsRepo.findByUser(userId, page, limit, unreadOnly, types)
   if (error) throw AppError.internal('Failed to fetch notifications')
 
   const { count: unreadCount } = await notificationsRepo.countUnread(userId)

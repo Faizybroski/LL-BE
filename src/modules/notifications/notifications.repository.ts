@@ -7,6 +7,7 @@ export async function findByUser(
   page: number,
   limit: number,
   unreadOnly = false,
+  types?: readonly string[],
 ) {
   let q = supabase
     .from(TABLE)
@@ -16,6 +17,7 @@ export async function findByUser(
     .order('created_at', { ascending: false })
 
   if (unreadOnly) q = q.eq('is_read', false)
+  if (types && types.length > 0) q = q.in('type', types)
 
   return q
 }

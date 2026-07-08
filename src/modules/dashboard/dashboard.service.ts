@@ -26,6 +26,7 @@ export interface DashboardStats {
   // Admin-only
   totalShippers?:       number
   pendingApprovals?:    number
+  invoicesDue?:         number
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -102,14 +103,23 @@ export async function getDashboardStats(
         .eq('is_approved', false) as any)
     : Promise.resolve({ count: 0 })
 
+  // Invoices still awaiting payment — unpaid, partially paid, or overdue with a balance outstanding.
+  const invoicesDuePromise: Promise<{ count: number | null }> = isAdmin
+    ? (supabase.from('invoices').select('id', { count: 'exact', head: true })
+        .is('deleted_at', null)
+        .in('status', ['unpaid', 'partially_paid', 'overdue'])
+        .gt('balance_due', 0) as any)
+    : Promise.resolve({ count: 0 })
+
   const recentTrackingPromise = trackingService.getRecentEvents(isAdmin, accountId, userId, companyRole, 5)
     .catch(() => [] as unknown[])
 
-  const [statusResults, trendResult, shippersResult, pendingResult, recentTracking] = await Promise.all([
+  const [statusResults, trendResult, shippersResult, pendingResult, invoicesDueResult, recentTracking] = await Promise.all([
     Promise.all(statusCountPromises),
     trendPromise,
     shippersPromise,
     pendingPromise,
+    invoicesDuePromise,
     recentTrackingPromise,
   ])
 
@@ -162,6 +172,7 @@ export async function getDashboardStats(
   if (isAdmin) {
     stats.totalShippers    = shippersResult.count ?? 0
     stats.pendingApprovals = pendingResult.count  ?? 0
+    stats.invoicesDue      = invoicesDueResult.count ?? 0
   }
 
   return stats

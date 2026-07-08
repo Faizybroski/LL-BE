@@ -10,6 +10,7 @@ import {
   updateAccountNoteSchema,
   updateOwnProfileSchema,
   updateCompanyLogoSchema,
+  updateOwnCompanySchema,
 } from './accounts.schema'
 import * as accountsController from './accounts.controller'
 
@@ -36,6 +37,15 @@ accountsRouter.patch(
   requireCompanyAdmin,
   validate(updateCompanyLogoSchema),
   accountsController.updateMyCompanyLogo,
+)
+
+// Company info/contacts self-service — company_admin only, scoped to their own account
+accountsRouter.patch(
+  '/me/company',
+  authMiddleware,
+  requireCompanyAdmin,
+  validate(updateOwnCompanySchema),
+  accountsController.updateMyCompany,
 )
 
 // ── Logo upload (signed-URL flow — bypasses storage RLS) ─────────────────────

@@ -4,9 +4,17 @@ import { z } from 'zod'
 export const createAccountSchema = z.object({
   accountName:     z.string().min(2).max(200),
   abn:             z.string().optional(),
+  website:         z.string().url().optional(),
   contactName:     z.string().optional(),
   contactEmail:    z.string().email().optional(),
   contactPhone:    z.string().optional(),
+  addressLine1:    z.string().optional(),
+  addressCity:     z.string().optional(),
+  addressState:    z.string().optional(),
+  addressPostcode: z.string().optional(),
+  addressCountry:  z.string().optional(),
+  billingEmail:        z.string().email().optional(),
+  accountsPayableEmail: z.string().email().optional(),
   billingAddress:  z.string().optional(),
   billingCity:     z.string().optional(),
   billingState:    z.string().optional(),
@@ -24,6 +32,27 @@ export const updateAccountSchema = createAccountSchema
     paymentTerms:   z.number().int().min(0).optional(),
     isActive:       z.boolean().optional(),
   })
+  .partial()
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })
+
+// ── Shipper: own company update (company_admin only, own account) ────────────
+// Deliberately excludes credit_limit/payment_terms/isActive — commercial terms
+// stay admin-managed even though the company_admin can edit their own contacts.
+export const updateOwnCompanySchema = z.object({
+  accountName:          z.string().min(2).max(200).optional(),
+  abn:                  z.string().optional(),
+  website:              z.string().url().optional().or(z.literal('')),
+  addressLine1:         z.string().optional(),
+  addressCity:          z.string().optional(),
+  addressState:         z.string().optional(),
+  addressPostcode:      z.string().optional(),
+  addressCountry:       z.string().optional(),
+  contactName:          z.string().optional(),
+  contactEmail:         z.string().email().optional().or(z.literal('')),
+  contactPhone:         z.string().optional(),
+  billingEmail:         z.string().email().optional().or(z.literal('')),
+  accountsPayableEmail: z.string().email().optional().or(z.literal('')),
+})
   .partial()
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })
 
@@ -69,3 +98,4 @@ export type CreateAccountNoteDto  = z.infer<typeof createAccountNoteSchema>
 export type UpdateAccountNoteDto  = z.infer<typeof updateAccountNoteSchema>
 export type UpdateOwnProfileDto   = z.infer<typeof updateOwnProfileSchema>
 export type UpdateCompanyLogoDto  = z.infer<typeof updateCompanyLogoSchema>
+export type UpdateOwnCompanyDto   = z.infer<typeof updateOwnCompanySchema>
