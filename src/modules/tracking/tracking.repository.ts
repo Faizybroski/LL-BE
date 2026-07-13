@@ -12,7 +12,7 @@ const EVENT_SELECT = `
   event_timestamp,
   created_at,
   updated_at,
-  locations ( id, city, province ),
+  locations ( id, city, province, latitude, longitude ),
   profiles!created_by ( id, full_name, avatar_url )
 `
 

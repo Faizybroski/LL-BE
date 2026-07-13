@@ -1,7 +1,7 @@
 import { supabase } from '../../services/supabase.service'
 import type { ListLocationsQuery } from './locations.schema'
 
-const SELECT = 'id, city, province, is_active, created_at, updated_at'
+const SELECT = 'id, city, province, latitude, longitude, is_active, created_at, updated_at'
 
 export async function findById(id: string) {
   return supabase
