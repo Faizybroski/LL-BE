@@ -23,9 +23,12 @@ shipmentsRouter.get(
   shipmentsController.list,
 )
 
+// Only System Admin creates deliveries — shipping companies may update
+// status/location/employee on existing loads but never author new ones.
 shipmentsRouter.post(
   '/',
   authMiddleware,
+  requireAdmin,
   validate(createShipmentSchema),
   shipmentsController.create,
 )
@@ -33,9 +36,12 @@ shipmentsRouter.post(
 // ── Single resource ───────────────────────────────────────────────────────────
 shipmentsRouter.get('/:id', authMiddleware, shipmentsController.getOne)
 
+// Full delivery edits are admin-only — shipping companies use the
+// status/assign-employee endpoints below instead.
 shipmentsRouter.patch(
   '/:id',
   authMiddleware,
+  requireAdmin,
   validate(updateShipmentSchema),
   shipmentsController.update,
 )
