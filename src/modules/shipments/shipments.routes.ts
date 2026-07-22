@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireAdmin, requireCompanyAdmin } from '../../middleware/role.middleware'
+import { requireAdmin, requireCompanyAdmin, requirePermission, requirePermissionIfAdmin } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createShipmentSchema,
@@ -19,6 +19,7 @@ export const shipmentsRouter = Router()
 shipmentsRouter.get(
   '/',
   authMiddleware,
+  requirePermissionIfAdmin('deliveries.view'),
   validate(listShipmentsSchema, 'query'),
   shipmentsController.list,
 )
@@ -29,12 +30,13 @@ shipmentsRouter.post(
   '/',
   authMiddleware,
   requireAdmin,
+  requirePermission('deliveries.create'),
   validate(createShipmentSchema),
   shipmentsController.create,
 )
 
 // ── Single resource ───────────────────────────────────────────────────────────
-shipmentsRouter.get('/:id', authMiddleware, shipmentsController.getOne)
+shipmentsRouter.get('/:id', authMiddleware, requirePermissionIfAdmin('deliveries.view'), shipmentsController.getOne)
 
 // Full delivery edits are admin-only — shipping companies use the
 // status/assign-employee endpoints below instead.
@@ -42,6 +44,7 @@ shipmentsRouter.patch(
   '/:id',
   authMiddleware,
   requireAdmin,
+  requirePermission('deliveries.edit'),
   validate(updateShipmentSchema),
   shipmentsController.update,
 )
@@ -50,6 +53,7 @@ shipmentsRouter.delete(
   '/:id',
   authMiddleware,
   requireAdmin,
+  requirePermission('deliveries.delete'),
   validate(deleteShipmentSchema),
   shipmentsController.remove,
 )
@@ -68,6 +72,7 @@ shipmentsRouter.post(
   '/:id/assign',
   authMiddleware,
   requireAdmin,
+  requirePermission('deliveries.assign'),
   validate(assignShipmentSchema),
   shipmentsController.assign,
 )

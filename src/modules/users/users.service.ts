@@ -65,7 +65,19 @@ export async function listUsers(query: ListUsersQuery) {
 }
 
 export async function updateUserRole(id: string, dto: UpdateUserRoleDto) {
-  const { data, error } = await usersRepo.updateById(id, { role: dto.role })
+  // Clear the role-specific sub-fields on every flip. Without this, an admin
+  // demoted to shipper and later re-promoted to admin would silently regain
+  // their old admin_role (e.g. 'ceo') and its permissions without anyone
+  // explicitly re-granting them — a stale-privilege reinstatement bug.
+  const updates: Record<string, unknown> = { role: dto.role }
+  if (dto.role === 'shipper') {
+    updates.admin_role = null
+  } else if (dto.role === 'admin') {
+    updates.admin_role = null
+    updates.company_role = null
+  }
+
+  const { data, error } = await usersRepo.updateById(id, updates)
   if (error || !data) throw AppError.notFound('User')
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)

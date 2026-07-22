@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireRole } from '../../middleware/role.middleware'
+import { requireRole, requirePermission } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   updateProfileSchema,
@@ -33,6 +33,7 @@ usersRouter.patch(
   '/:id/role',
   authMiddleware,
   requireRole('admin'),
+  requirePermission('employees.manage_roles'),
   validate(updateUserRoleSchema),
   usersController.updateUserRole,
 )

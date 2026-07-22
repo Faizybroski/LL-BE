@@ -14,6 +14,8 @@ import { trackingRouter } from '../modules/tracking/tracking.routes'
 import { statusesRouter } from '../modules/statuses/statuses.routes'
 import { legalRouter } from '../modules/legal/legal.routes'
 import { supportRouter } from '../modules/support/support.routes'
+import { adminEmployeesRouter } from '../modules/admin-employees/admin-employees.routes'
+import { adminRolesRouter } from '../modules/admin-roles/admin-roles.routes'
 
 export const v1Router = Router()
 
@@ -32,3 +34,5 @@ v1Router.use('/tracking',      trackingRouter)
 v1Router.use('/statuses',      statusesRouter)
 v1Router.use('/legal',         legalRouter)
 v1Router.use('/support',       supportRouter)
+v1Router.use('/admin/employees', adminEmployeesRouter)
+v1Router.use('/admin/roles',     adminRolesRouter)

@@ -45,6 +45,42 @@ export function requireCompanyAdmin(req: Request, _res: Response, next: NextFunc
   next()
 }
 
+// ── requirePermission ─────────────────────────────────────────────────────────
+// Requires the user to be a platform admin whose JWT-embedded permission
+// snapshot includes the given key. Permissions are resolved from
+// admin_role_permissions at login/refresh time — the same "no DB call, up to
+// 15 min staleness on change" tradeoff as role/companyRole (see auth.middleware.ts).
+// Usage: router.delete('/:id', authMiddleware, requirePermission('invoices.delete'), handler)
+export function requirePermission(key: string) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      return void next(AppError.unauthorized())
+    }
+    if (req.user.role !== 'admin' || !req.user.permissions.includes(key)) {
+      return void next(AppError.forbidden(`This action requires the "${key}" permission`))
+    }
+    next()
+  }
+}
+
+// ── requirePermissionIfAdmin ──────────────────────────────────────────────────
+// Like requirePermission, but only enforced for platform admins — shippers pass
+// through untouched. For routes shared between both roles (e.g. GET /quotations,
+// which shippers use to view their own quotations and admins use to view all of
+// them), requirePermission would incorrectly block every shipper too.
+// Usage: router.get('/', authMiddleware, requirePermissionIfAdmin('quotations.view'), handler)
+export function requirePermissionIfAdmin(key: string) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      return void next(AppError.unauthorized())
+    }
+    if (req.user.role === 'admin' && !req.user.permissions.includes(key)) {
+      return void next(AppError.forbidden(`This action requires the "${key}" permission`))
+    }
+    next()
+  }
+}
+
 // ── requireOwnerOrAdmin ───────────────────────────────────────────────────────
 // Allows the resource owner OR any admin to proceed.
 // Used for routes like PATCH /users/:id — a user can edit their own profile

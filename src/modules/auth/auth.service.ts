@@ -20,7 +20,20 @@ import type {
   MfaDisableDto,
   MfaChallengeDto,
 } from './auth.schema'
-import type { UserRole, CompanyRole } from '../../middleware/auth.middleware'
+import type { UserRole, CompanyRole, AdminRole } from '../../middleware/auth.middleware'
+
+// Fetches the granted permission keys for an admin role at token-issue time.
+// Returns [] for non-admin users (companyRole path never calls this).
+async function resolveAdminPermissions(adminRole: AdminRole): Promise<string[]> {
+  if (!adminRole) return []
+  const { data, error } = await supabase
+    .from('admin_role_permissions')
+    .select('permission_key')
+    .eq('admin_role', adminRole)
+    .eq('granted', true)
+  if (error || !data) return []
+  return data.map((row) => row.permission_key as string)
+}
 
 // Converts JWT duration strings ("15m", "1h", "30s") to seconds for the API response.
 function parseExpiry(s: string): number {
@@ -44,10 +57,13 @@ async function issueTokenPair(
   role:        UserRole,
   accountId:   string | null,
   companyRole: CompanyRole,
+  adminRole:   AdminRole,
   context:     { ipAddress?: string; userAgent?: string },
-): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
-  // 1. Sign a short-lived JWT (15 min by default)
-  const accessToken = signAccessToken({ sub: userId, email, role, accountId, companyRole })
+): Promise<{ accessToken: string; refreshToken: string; expiresIn: number; permissions: string[] }> {
+  // 1. Sign a short-lived JWT (15 min by default), embedding a permission
+  // snapshot resolved from admin_role_permissions for admin users.
+  const permissions = await resolveAdminPermissions(adminRole)
+  const accessToken = signAccessToken({ sub: userId, email, role, accountId, companyRole, adminRole, permissions })
 
   // 2. Generate an opaque refresh token and store its SHA-256 hash
   const { rawToken, tokenHash } = generateRefreshToken()
@@ -70,6 +86,7 @@ async function issueTokenPair(
     accessToken,
     refreshToken: rawToken, // raw value — only time it ever leaves the server
     expiresIn: parseExpiry(env.JWT_ACCESS_EXPIRES_IN),
+    permissions,
   }
 }
 
@@ -98,7 +115,7 @@ export async function login(
   // and should not be extended with application-level attributes.
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role, company_role, full_name, avatar_url, is_active, account_id, mfa_enabled')
+    .select('role, company_role, admin_role, full_name, avatar_url, is_active, account_id, mfa_enabled')
     .eq('id', data.user.id)
     .single()
 
@@ -120,7 +137,8 @@ export async function login(
   }
 
   const companyRole = (profile.company_role ?? null) as CompanyRole
-  const tokens = await issueTokenPair(data.user.id, data.user.email!, profile.role as UserRole, profile.account_id, companyRole, context)
+  const adminRole = (profile.admin_role ?? null) as AdminRole
+  const tokens = await issueTokenPair(data.user.id, data.user.email!, profile.role as UserRole, profile.account_id, companyRole, adminRole, context)
 
   return {
     mfaRequired: false as const,
@@ -130,6 +148,8 @@ export async function login(
       email:       data.user.email,
       role:        profile.role,
       companyRole: profile.company_role ?? null,
+      adminRole:   profile.admin_role ?? null,
+      permissions: tokens.permissions,
       fullName:    profile.full_name,
       avatarUrl:   profile.avatar_url ?? null,
       accountId:   profile.account_id,
@@ -147,7 +167,7 @@ export async function mfaChallenge(
 
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role, company_role, is_active, account_id, mfa_secret, mfa_enabled')
+    .select('role, company_role, admin_role, is_active, account_id, mfa_secret, mfa_enabled')
     .eq('id', userId)
     .single()
 
@@ -165,7 +185,8 @@ export async function mfaChallenge(
   }
 
   const companyRole = (profile.company_role ?? null) as CompanyRole
-  const tokens = await issueTokenPair(userId, email, profile.role as UserRole, profile.account_id, companyRole, context)
+  const adminRole = (profile.admin_role ?? null) as AdminRole
+  const tokens = await issueTokenPair(userId, email, profile.role as UserRole, profile.account_id, companyRole, adminRole, context)
 
   return {
     ...tokens,
@@ -174,6 +195,8 @@ export async function mfaChallenge(
       email,
       role:        profile.role,
       companyRole: profile.company_role ?? null,
+      adminRole:   profile.admin_role ?? null,
+      permissions: tokens.permissions,
       fullName:    authUser.user?.user_metadata?.full_name ?? null,
       avatarUrl:   null,
       accountId:   profile.account_id,
@@ -325,7 +348,7 @@ export async function refresh(
   // Fetch fresh user data — role may have changed since last login
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role, company_role, is_active, account_id')
+    .select('role, company_role, admin_role, is_active, account_id')
     .eq('id', anyToken.user_id)
     .single()
 
@@ -336,7 +359,8 @@ export async function refresh(
   const email = authUser.user?.email ?? ''
 
   const companyRole = (profile.company_role ?? null) as CompanyRole
-  return issueTokenPair(anyToken.user_id, email, profile.role as UserRole, profile.account_id, companyRole, context)
+  const adminRole = (profile.admin_role ?? null) as AdminRole
+  return issueTokenPair(anyToken.user_id, email, profile.role as UserRole, profile.account_id, companyRole, adminRole, context)
 }
 
 // ── POST /auth/logout ──────────────────────────────────────────────────────────
@@ -369,7 +393,7 @@ export async function logout(userId: string, dto: LogoutDto) {
 export async function getMe(userId: string) {
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, role, company_role, full_name, phone, avatar_url, account_id, is_active, is_approved, created_at')
+    .select('id, role, company_role, admin_role, full_name, phone, avatar_url, account_id, is_active, is_approved, created_at')
     .eq('id', userId)
     .single()
 
@@ -377,12 +401,15 @@ export async function getMe(userId: string) {
   if (!data.is_active) throw AppError.forbidden('Account has been deactivated')
 
   const { data: authUser } = await supabase.auth.admin.getUserById(userId)
+  const permissions = await resolveAdminPermissions((data.admin_role ?? null) as AdminRole)
 
   return {
     id:          data.id,
     email:       authUser.user?.email ?? '',
     role:        data.role,
     companyRole: data.company_role ?? null,
+    adminRole:   data.admin_role ?? null,
+    permissions,
     fullName:    data.full_name,
     phone:       data.phone,
     avatarUrl:   data.avatar_url,
@@ -478,6 +505,7 @@ export async function register(
     'shipper',
     account.account_id,
     'company_admin',
+    null,
     context,
   )
 
@@ -488,6 +516,8 @@ export async function register(
       email:       data.user!.email!,
       role:        'shipper' as const,
       companyRole: 'company_admin' as const,
+      adminRole:   null,
+      permissions: [] as string[],
       fullName:    dto.fullName,
       avatarUrl:   null,
       accountId:   account.account_id,

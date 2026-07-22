@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireAdmin, requireCompanyAdmin } from '../../middleware/role.middleware'
+import { requireAdmin, requireCompanyAdmin, requirePermission } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createAccountSchema,
@@ -68,6 +68,7 @@ accountsRouter.get(
   '/',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.view'),
   validate(listAccountsQuerySchema, 'query'),
   accountsController.list,
 )
@@ -76,6 +77,7 @@ accountsRouter.post(
   '/',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.create'),
   validate(createAccountSchema),
   accountsController.create,
 )
@@ -84,6 +86,7 @@ accountsRouter.get(
   '/:id',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.view'),
   accountsController.getOne,
 )
 
@@ -91,6 +94,7 @@ accountsRouter.patch(
   '/:id',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.edit'),
   validate(updateAccountSchema),
   accountsController.update,
 )
@@ -99,6 +103,7 @@ accountsRouter.patch(
   '/:id/logo',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.edit'),
   validate(updateCompanyLogoSchema),
   accountsController.updateOneCompanyLogo,
 )
@@ -107,6 +112,7 @@ accountsRouter.delete(
   '/:id',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.delete'),
   accountsController.remove,
 )
 
@@ -115,6 +121,7 @@ accountsRouter.get(
   '/:id/notes',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.view'),
   accountsController.listNotes,
 )
 
@@ -122,6 +129,7 @@ accountsRouter.post(
   '/:id/notes',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.edit'),
   validate(createAccountNoteSchema),
   accountsController.createNote,
 )
@@ -130,6 +138,7 @@ accountsRouter.patch(
   '/:id/notes/:noteId',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.edit'),
   validate(updateAccountNoteSchema),
   accountsController.updateNote,
 )
@@ -138,5 +147,6 @@ accountsRouter.delete(
   '/:id/notes/:noteId',
   authMiddleware,
   requireAdmin,
+  requirePermission('customers.edit'),
   accountsController.deleteNote,
 )

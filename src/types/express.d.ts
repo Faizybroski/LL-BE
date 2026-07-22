@@ -1,4 +1,4 @@
-import { UserRole, CompanyRole } from '../middleware/auth.middleware'
+import { UserRole, CompanyRole, AdminRole } from '../middleware/auth.middleware'
 
 declare global {
   namespace Express {
@@ -9,6 +9,8 @@ declare global {
         role:        UserRole
         accountId:   string | null
         companyRole: CompanyRole
+        adminRole:   AdminRole
+        permissions: string[]
       }
       requestId: string
       startTime: number

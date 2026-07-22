@@ -7,6 +7,7 @@ import { AppError } from '../lib/errors'
 // from one canonical location.
 export type UserRole    = 'admin' | 'shipper'
 export type CompanyRole = 'company_admin' | 'employee' | null
+export type AdminRole   = 'ceo' | 'vp' | 'manager' | 'assistant' | null
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 // Previous implementation: supabase.auth.getUser(token) — 1 network call per request.
@@ -33,6 +34,8 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
     role:        payload.role,
     accountId:   payload.accountId ?? null,
     companyRole: payload.companyRole ?? null,
+    adminRole:   payload.adminRole ?? null,
+    permissions: payload.permissions ?? [],
   }
 
   next()

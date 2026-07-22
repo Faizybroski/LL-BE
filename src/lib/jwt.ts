@@ -1,7 +1,7 @@
 import jwt, { SignOptions } from 'jsonwebtoken'
 import { env } from './env'
 import { AppError } from './errors'
-import type { UserRole, CompanyRole } from '../middleware/auth.middleware'
+import type { UserRole, CompanyRole, AdminRole } from '../middleware/auth.middleware'
 
 // ── Payload contract ────────────────────────────────────────────────────────
 // Minimal claims — role is included so middleware can authorise without a DB call.
@@ -12,6 +12,8 @@ export interface JwtPayload {
   role:        UserRole
   accountId:   string | null   // shipper's account; null for admin users
   companyRole: CompanyRole      // company_admin | employee | null (null for admins)
+  adminRole?:  AdminRole        // ceo | vp | manager | assistant | null (null for shippers)
+  permissions?: string[]        // resolved granted permission keys for adminRole, snapshotted at issue time
   iat:         number          // issued-at  (added automatically by jsonwebtoken)
   exp:         number          // expiry     (added automatically by jsonwebtoken)
 }
