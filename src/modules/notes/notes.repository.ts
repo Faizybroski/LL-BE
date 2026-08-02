@@ -25,7 +25,7 @@ export async function update(id: string, data: Record<string, unknown>) {
     .eq('note_id', id)
     .is('deleted_at', null)
     .select('*, profiles ( id, full_name )')
-    .single()
+    .maybeSingle()
 }
 
 export async function deleteById(id: string, userId: string) {

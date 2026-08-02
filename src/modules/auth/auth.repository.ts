@@ -50,7 +50,7 @@ export async function findRefreshTokenByHash(tokenHash: string) {
     .from('refresh_tokens')
     .select('token_id, user_id, is_revoked, expires_at')
     .eq('token_hash', tokenHash)
-    .single()
+    .maybeSingle()
 }
 
 // ── Revoke a single token ─────────────────────────────────────────────────────

@@ -37,7 +37,7 @@ export async function listQuotations(
   // Customers never see internal drafts — only quotations that have been issued to them.
   const excludeDraft = callerRole === 'shipper'
   const { data, count, error } = await repo.findAll(query, accountId, employeeId, excludeDraft)
-  if (error) throw AppError.internal('Failed to fetch quotations')
+  if (error) throw AppError.internal('Failed to fetch quotations', error)
   return { quotations: data ?? [], total: count ?? 0 }
 }
 
@@ -76,6 +76,8 @@ export async function getQuotation(
       if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
         throw AppError.forbidden()
       }
+    } else {
+      throw AppError.forbidden()
     }
   }
 
@@ -105,10 +107,17 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
     tax_rate:         dto.taxRate ?? 0,
     tax,
     total,
-    currency:         dto.currency ?? 'AUD',
+    currency:         dto.currency ?? 'CAD',
+    origin_address:      dto.originAddress ?? null,
+    origin_lat:          dto.originLat ?? null,
+    origin_lng:          dto.originLng ?? null,
+    destination_address: dto.destinationAddress ?? null,
+    destination_lat:     dto.destinationLat ?? null,
+    destination_lng:     dto.destinationLng ?? null,
+    distance_km:         dto.distanceKm ?? null,
   })
 
-  if (error || !quotation) throw AppError.internal('Failed to create quotation')
+  if (error || !quotation) throw AppError.internal('Failed to create quotation', error)
 
   if (items.length > 0) {
     const rows = items.map((item, idx) => ({
@@ -123,7 +132,19 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
       sort_order:   item.sort_order ?? idx,
     }))
     const { error: itemsError } = await repo.upsertItems(quotation.id, rows)
-    if (itemsError) throw AppError.internal('Failed to save quotation items')
+    if (itemsError) throw AppError.internal('Failed to save quotation items', itemsError)
+  }
+
+  if (dto.status === 'sent') {
+    const quotationNumber = quotation.quotation_number as string
+    notifyUser(dto.profileId, 'quotation_sent', 'New quotation received', `Quotation ${quotationNumber} is ready for review.`, quotation.id)
+    void notificationsService.notifyAllAdmins(
+      'quotation_sent',
+      'Quotation sent',
+      `Quotation ${quotationNumber} was sent to a shipper.`,
+      'quotation',
+      quotation.id,
+    )
   }
 
   const { data: full } = await repo.findById(quotation.id)
@@ -145,6 +166,13 @@ export async function updateQuotation(
     throw AppError.forbidden('Only draft quotations can be edited')
   }
 
+  // Accepted/Rejected are recorded exclusively via the shipper's /accept and
+  // /decline endpoints — this PATCH route is admin-only, so it may only move
+  // a quotation between Draft and Sent.
+  if (dto.status !== undefined && dto.status !== 'draft' && dto.status !== 'sent') {
+    throw AppError.forbidden('Status can only be set to Draft or Sent here — Accepted/Declined are set by the shipper')
+  }
+
   if (callerRole === 'shipper') {
     if (companyRole === 'employee' && callerId) {
       if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
@@ -154,6 +182,8 @@ export async function updateQuotation(
       if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
         throw AppError.forbidden()
       }
+    } else {
+      throw AppError.forbidden()
     }
   }
 
@@ -180,6 +210,13 @@ export async function updateQuotation(
   if (dto.terms         !== undefined) patch.terms            = dto.terms
   if (dto.loadId        !== undefined) patch.load_id          = dto.loadId
   if (dto.currency      !== undefined) patch.currency         = dto.currency
+  if (dto.originAddress      !== undefined) patch.origin_address      = dto.originAddress
+  if (dto.originLat          !== undefined) patch.origin_lat          = dto.originLat
+  if (dto.originLng          !== undefined) patch.origin_lng          = dto.originLng
+  if (dto.destinationAddress !== undefined) patch.destination_address = dto.destinationAddress
+  if (dto.destinationLat     !== undefined) patch.destination_lat     = dto.destinationLat
+  if (dto.destinationLng     !== undefined) patch.destination_lng     = dto.destinationLng
+  if (dto.distanceKm         !== undefined) patch.distance_km         = dto.distanceKm
   patch.subtotal = subtotal
   patch.discount = discount
   patch.tax_rate = taxRate
@@ -187,7 +224,7 @@ export async function updateQuotation(
   patch.total    = total
 
   const { data: updated, error } = await repo.update(id, patch)
-  if (error || !updated) throw AppError.internal('Failed to update quotation')
+  if (error || !updated) throw AppError.internal('Failed to update quotation', error)
 
   if (dto.items !== undefined) {
     const rows = items.map((item, idx) => ({
@@ -201,18 +238,15 @@ export async function updateQuotation(
       notes:        item.notes ?? null,
       sort_order:   item.sort_order ?? idx,
     }))
-    await repo.upsertItems(id, rows)
+    const { error: itemsError } = await repo.upsertItems(id, rows)
+    if (itemsError) throw AppError.internal('Failed to save quotation items', itemsError)
   }
 
-  if (dto.status !== undefined && dto.status !== existing.status) {
+  // Only Draft → Sent is reachable here (see guard above) — Accepted/Rejected
+  // notifications are fired from acceptQuotation/declineQuotation instead.
+  if (dto.status === 'sent' && dto.status !== existing.status) {
     const quotationNumber = updated.quotation_number as string
-    if (dto.status === 'sent') {
-      notifyUser(existing.profile_id as string, 'quotation_sent', 'New quotation received', `Quotation ${quotationNumber} is ready for review.`, id)
-    } else if (dto.status === 'accepted') {
-      notifyUser(existing.profile_id as string, 'quotation_accepted', 'Quotation accepted', `Quotation ${quotationNumber} has been accepted.`, id)
-    } else if (dto.status === 'rejected') {
-      notifyUser(existing.profile_id as string, 'quotation_rejected', 'Quotation rejected', `Quotation ${quotationNumber} has been rejected.`, id)
-    }
+    notifyUser(existing.profile_id as string, 'quotation_sent', 'New quotation received', `Quotation ${quotationNumber} is ready for review.`, id)
   }
 
   const { data: full } = await repo.findById(id)
@@ -240,10 +274,10 @@ async function assertCustomerCanActOn(
 }
 
 async function acceptanceIdentity(userId: string, accountId: string | null | undefined) {
-  const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', userId).single()
+  const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', userId).maybeSingle()
   let companyName: string | null = null
   if (accountId) {
-    const { data: account } = await supabase.from('accounts').select('account_name').eq('account_id', accountId).single()
+    const { data: account } = await supabase.from('accounts').select('account_name').eq('account_id', accountId).maybeSingle()
     companyName = account?.account_name ?? null
   }
   return { fullName: (profile?.full_name as string | null) ?? null, companyName }
@@ -276,20 +310,40 @@ export async function acceptQuotation(
   }
 
   const acceptedAt = new Date().toISOString()
-  const { error: updateError } = await repo.update(id, { status: 'accepted', accepted_at: acceptedAt })
-  if (updateError) throw AppError.internal('Failed to accept quotation')
+  const { data: acceptedRow, error: updateError } = await repo.updateIfStatus(id, 'sent', { status: 'accepted', accepted_at: acceptedAt })
+  if (updateError) throw AppError.internal('Failed to accept quotation', updateError)
+  // No row matched `status = 'sent'` anymore — another request (double-click,
+  // retry) already changed it between our read above and this write.
+  if (!acceptedRow) throw AppError.conflict('This quotation was already acted on')
 
   const { fullName, companyName } = await acceptanceIdentity(callerId, callerAccountId)
+  // A bare IPv4/IPv6 shape check — an empty string or garbled proxy header
+  // would otherwise reach the ip_address INET column and fail the insert.
+  const ipAddress = context.ipAddress && /^[0-9a-fA-F.:]+$/.test(context.ipAddress) ? context.ipAddress : null
   const { error: acceptError } = await repo.createAcceptance({
     quotation_id:  id,
     user_id:       callerId,
     full_name:     fullName,
     company_name:  companyName,
-    ip_address:    context.ipAddress ?? null,
+    ip_address:    ipAddress,
     user_agent:    context.userAgent ?? null,
     terms_version: dto.termsVersion,
   })
-  if (acceptError) throw AppError.internal('Failed to record acceptance')
+  if (acceptError) {
+    // Roll back the status flip so the quotation isn't stuck permanently
+    // "accepted" with no acceptance record and no way to retry.
+    await repo.update(id, { status: 'sent', accepted_at: null })
+    throw AppError.internal('Failed to record acceptance', acceptError)
+  }
+
+  const quotationNumber = existing.quotation_number as string
+  void notificationsService.notifyAllAdmins(
+    'quotation_accepted',
+    'Quotation accepted',
+    `Quotation ${quotationNumber} has been accepted${companyName ? ` by ${companyName}` : ''}.`,
+    'quotation',
+    id,
+  )
 
   const { data: full } = await repo.findById(id)
   return full
@@ -314,8 +368,18 @@ export async function declineQuotation(
   if (existing.status === 'rejected') throw AppError.conflict('Quotation has already been declined')
   if (existing.status !== 'sent') throw AppError.unprocessable('Only quotations awaiting review can be declined')
 
-  const { error } = await repo.update(id, { status: 'rejected', declined_at: new Date().toISOString() })
-  if (error) throw AppError.internal('Failed to decline quotation')
+  const { data: declinedRow, error } = await repo.updateIfStatus(id, 'sent', { status: 'rejected', declined_at: new Date().toISOString() })
+  if (error) throw AppError.internal('Failed to decline quotation', error)
+  if (!declinedRow) throw AppError.conflict('This quotation was already acted on')
+
+  const quotationNumber = existing.quotation_number as string
+  void notificationsService.notifyAllAdmins(
+    'quotation_rejected',
+    'Quotation declined',
+    `Quotation ${quotationNumber} has been declined.`,
+    'quotation',
+    id,
+  )
 
   const { data: full } = await repo.findById(id)
   return full
@@ -344,11 +408,13 @@ export async function deleteQuotation(
       if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
         throw AppError.forbidden()
       }
+    } else {
+      throw AppError.forbidden()
     }
   }
 
   const { error } = await repo.softDelete(id)
-  if (error) throw AppError.internal('Failed to delete quotation')
+  if (error) throw AppError.internal('Failed to delete quotation', error)
 }
 
 export async function duplicateQuotation(id: string, createdBy: string) {
@@ -374,6 +440,13 @@ export async function duplicateQuotation(id: string, createdBy: string) {
     tax:             source.tax,
     total:           source.total,
     currency:        source.currency,
+    originAddress:      source.origin_address ?? null,
+    originLat:          source.origin_lat ?? null,
+    originLng:          source.origin_lng ?? null,
+    destinationAddress: source.destination_address ?? null,
+    destinationLat:     source.destination_lat ?? null,
+    destinationLng:     source.destination_lng ?? null,
+    distanceKm:         source.distance_km ?? null,
     items: (source.quotation_items ?? []).map((i: Record<string, unknown>, idx: number) => ({
       description: i.description as string,
       category:    i.category as never,
@@ -389,9 +462,15 @@ export async function duplicateQuotation(id: string, createdBy: string) {
   return createQuotation(dto, createdBy)
 }
 
-export async function generatePdf(id: string) {
-  const { data } = await repo.findById(id)
-  if (!data) throw AppError.notFound('Quotation')
+export async function generatePdf(
+  id: string,
+  callerRole: string,
+  callerAccountId?: string | null,
+  callerId?: string,
+  companyRole?: string | null,
+) {
+  // Reuses getQuotation's ownership check (also hides drafts from shippers).
+  const data = await getQuotation(id, callerRole, callerAccountId, callerId, companyRole)
 
   const pdfUrl = await generateAndUploadQuotationPdf(data)
   await repo.updatePdfUrl(id, pdfUrl)

@@ -13,8 +13,8 @@ export async function getPermissionsMatrix() {
     adminRolesRepo.findRolePermissionMatrix(),
   ])
 
-  if (catalogErr || !permissions) throw AppError.internal('Failed to fetch permission catalog')
-  if (matrixErr || !matrix) throw AppError.internal('Failed to fetch role permission matrix')
+  if (catalogErr || !permissions) throw AppError.internal('Failed to fetch permission catalog', catalogErr)
+  if (matrixErr || !matrix) throw AppError.internal('Failed to fetch role permission matrix', matrixErr)
 
   return { permissions, matrix }
 }
@@ -29,7 +29,7 @@ export async function updateRolePermission(role: AdminRoleValue, permissionKey: 
   if (findErr || !existing) throw AppError.notFound('Permission')
 
   const { data, error } = await adminRolesRepo.upsertGrant(role, permissionKey, granted)
-  if (error || !data) throw AppError.internal('Failed to update permission')
+  if (error || !data) throw AppError.internal('Failed to update permission', error)
 
   return data
 }

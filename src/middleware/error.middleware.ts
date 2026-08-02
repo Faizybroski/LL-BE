@@ -3,6 +3,35 @@ import { AppError } from '../lib/errors'
 import { errorResponse } from '../lib/response'
 import { logger } from '../lib/logger'
 import { env, allowedOrigins } from '../lib/env'
+import {
+  expandCause,
+  classifyConnectionError,
+  getIdleMsSinceLastActivity,
+  getProcessUptimeMs,
+} from '../lib/process-diagnostics'
+
+// DIAGNOSTIC ONLY — full error/request fingerprint for the intermittent-500
+// investigation. Does not change what gets sent back to the client.
+function diagnosticFields(err: Error, req: Request) {
+  const e = err as NodeJS.ErrnoException & { cause?: unknown }
+  return {
+    requestId: req.requestId,
+    method: req.method,
+    url: req.originalUrl,
+    name: e.name,
+    message: e.message,
+    stack: e.stack,
+    code: e.code,
+    errno: e.errno,
+    cause: expandCause(e.cause),
+    connectionErrorClass: classifyConnectionError(e),
+    pid: process.pid,
+    processUptimeMs: getProcessUptimeMs(),
+    idleMsBeforeThisRequest: getIdleMsSinceLastActivity(),
+    memory: process.memoryUsage(),
+    timestamp: new Date().toISOString(),
+  }
+}
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function errorMiddleware(err: Error, req: Request, res: Response, _next: NextFunction): void {
@@ -24,6 +53,7 @@ export function errorMiddleware(err: Error, req: Request, res: Response, _next: 
   if (err instanceof AppError) {
     if (err.statusCode >= 500) {
       logger.error(err.message, { stack: err.stack, url: req.url, method: req.method })
+      logger.error('DIAGNOSTIC AppError >=500', diagnosticFields(err, req))
     }
     errorResponse(res, err.statusCode, err.message, err.code, err.details)
     return
@@ -36,6 +66,7 @@ export function errorMiddleware(err: Error, req: Request, res: Response, _next: 
   }
 
   logger.error('Unhandled error', { message: err.message, stack: err.stack, url: req.url })
+  logger.error('DIAGNOSTIC Unhandled error', diagnosticFields(err, req))
 
   errorResponse(
     res,

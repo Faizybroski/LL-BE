@@ -1,6 +1,7 @@
 import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import * as accountsRepo from './accounts.repository'
+import * as notificationsService from '../notifications/notifications.service'
 import type {
   CreateAccountDto,
   UpdateAccountDto,
@@ -11,16 +12,34 @@ import type {
   UpdateCompanyLogoDto,
   UpdateOwnCompanyDto,
 } from './accounts.schema'
+import type { NotificationType } from '../notifications/notifications.schema'
 
 // Empty strings from the frontend (a cleared input) mean "clear this field".
 function blankToNull(value: string | undefined): string | null | undefined {
   return value === '' ? null : value
 }
 
+// Fire-and-forget — notifications must never block the main operation.
+function notifyUser(userId: string, type: NotificationType, title: string, body: string, entityId: string): void {
+  void notificationsService
+    .createNotification({ userId, type, title, body, entityType: 'account', entityId })
+    .catch(() => undefined)
+}
+
+async function findCompanyAdminId(accountId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('account_id', accountId)
+    .eq('company_role', 'company_admin')
+    .maybeSingle()
+  return (data?.id as string | undefined) ?? null
+}
+
 // ── Admin: Accounts ───────────────────────────────────────────────────────────
 export async function listAccounts(query: ListAccountsQuery) {
   const { data, count, error } = await accountsRepo.findAll(query)
-  if (error) throw AppError.internal('Failed to fetch accounts')
+  if (error) throw AppError.internal('Failed to fetch accounts', error)
   return { accounts: data ?? [], total: count ?? 0 }
 }
 
@@ -59,8 +78,16 @@ export async function createAccount(dto: CreateAccountDto, createdBy: string) {
     if ((error as { code?: string }).code === '23505') {
       throw AppError.conflict('An account with that name already exists')
     }
-    throw AppError.internal('Failed to create account')
+    throw AppError.internal('Failed to create account', error)
   }
+
+  void notificationsService.notifyAllAdmins(
+    'account_created',
+    'New account created',
+    `Account "${data.account_name as string}" was created.`,
+    'account',
+    data.account_id as string,
+  )
 
   return data
 }
@@ -92,7 +119,15 @@ export async function updateAccount(id: string, dto: UpdateAccountDto) {
   if (dto.isActive        !== undefined) updates.is_active        = dto.isActive
 
   const { data, error } = await accountsRepo.updateById(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update account')
+  if (error || !data) throw AppError.internal('Failed to update account', error)
+
+  const accountName = data.account_name as string
+  void notificationsService.notifyAllAdmins('account_updated', 'Account updated', `Account "${accountName}" was updated.`, 'account', id)
+  const companyAdminId = await findCompanyAdminId(id)
+  if (companyAdminId) {
+    notifyUser(companyAdminId, 'account_updated', 'Your account was updated', `Your company account "${accountName}" was updated by an administrator.`, id)
+  }
+
   return data
 }
 
@@ -101,14 +136,14 @@ export async function updateCompanyLogo(accountId: string, dto: UpdateCompanyLog
     logo_url:   dto.logoUrl,
     updated_at: new Date().toISOString(),
   })
-  if (error || !data) throw AppError.internal('Failed to update company logo')
+  if (error || !data) throw AppError.internal('Failed to update company logo', error)
   return data
 }
 
 export async function deactivateAccount(id: string) {
   await getAccount(id)
   const { error } = await accountsRepo.softDeleteById(id)
-  if (error) throw AppError.internal('Failed to deactivate account')
+  if (error) throw AppError.internal('Failed to deactivate account', error)
 }
 
 // ── Admin: Account Notes ──────────────────────────────────────────────────────
@@ -116,7 +151,7 @@ export async function listAccountNotes(accountId: string) {
   await getAccount(accountId)
 
   const { data, error } = await accountsRepo.findNotesByAccountId(accountId)
-  if (error) throw AppError.internal('Failed to fetch notes')
+  if (error) throw AppError.internal('Failed to fetch notes', error)
 
   const notes = data ?? []
 
@@ -154,7 +189,16 @@ export async function createAccountNote(
     createdBy,
   })
 
-  if (error || !data) throw AppError.internal('Failed to create note')
+  if (error || !data) throw AppError.internal('Failed to create note', error)
+
+  void notificationsService.notifyAllAdmins('account_note_created', 'Account note added', 'A note was added to a shipper account.', 'account', accountId)
+  if (!dto.isInternal) {
+    const companyAdminId = await findCompanyAdminId(accountId)
+    if (companyAdminId) {
+      notifyUser(companyAdminId, 'account_note_created', 'New note on your account', 'An administrator added a note to your company account.', accountId)
+    }
+  }
+
   return data
 }
 
@@ -168,7 +212,16 @@ export async function updateAccountNote(
   if (findErr || !existing) throw AppError.notFound('Note')
 
   const { data, error } = await accountsRepo.updateNoteById(noteId, dto.content, updatedBy)
-  if (error || !data) throw AppError.internal('Failed to update note')
+  if (error || !data) throw AppError.internal('Failed to update note', error)
+
+  void notificationsService.notifyAllAdmins('account_note_updated', 'Account note updated', 'A note on a shipper account was updated.', 'account', accountId)
+  if (!existing.is_internal) {
+    const companyAdminId = await findCompanyAdminId(accountId)
+    if (companyAdminId) {
+      notifyUser(companyAdminId, 'account_note_updated', 'Note on your account updated', 'An administrator updated a note on your company account.', accountId)
+    }
+  }
+
   return data
 }
 
@@ -177,7 +230,7 @@ export async function deleteAccountNote(accountId: string, noteId: string) {
   if (findErr || !existing) throw AppError.notFound('Note')
 
   const { error } = await accountsRepo.softDeleteNoteById(noteId)
-  if (error) throw AppError.internal('Failed to delete note')
+  if (error) throw AppError.internal('Failed to delete note', error)
 }
 
 // ── Shipper: own account (company) ───────────────────────────────────────────
@@ -193,7 +246,16 @@ export async function updateOwnProfile(userId: string, dto: UpdateOwnProfileDto)
   if (dto.phone    !== undefined) updates.phone     = dto.phone
 
   const { data, error } = await accountsRepo.updateProfileById(userId, updates)
-  if (error || !data) throw AppError.internal('Failed to update profile')
+  if (error || !data) throw AppError.internal('Failed to update profile', error)
+
+  void notificationsService.notifyAllAdmins(
+    'account_updated',
+    'Shipper profile updated',
+    `${(data.full_name as string | null) ?? 'A shipper'} updated their profile.`,
+    'account',
+    userId,
+  )
+
   return data
 }
 
@@ -219,7 +281,16 @@ export async function updateOwnCompany(userId: string, dto: UpdateOwnCompanyDto)
   if (dto.accountsPayableEmail  !== undefined) updates.accounts_payable_email = blankToNull(dto.accountsPayableEmail)
 
   const { data, error } = await accountsRepo.updateById(accountId, updates)
-  if (error || !data) throw AppError.internal('Failed to update company profile')
+  if (error || !data) throw AppError.internal('Failed to update company profile', error)
+
+  void notificationsService.notifyAllAdmins(
+    'account_updated',
+    'Shipper company profile updated',
+    `Company "${data.account_name as string}" updated their own company profile.`,
+    'account',
+    accountId,
+  )
+
   return data
 }
 
@@ -237,7 +308,7 @@ export async function getLogoUploadUrl(accountId: string) {
   const { data, error } = await supabase.storage
     .from('company-logos')
     .createSignedUploadUrl(path)
-  if (error || !data) throw AppError.internal('Failed to generate logo upload URL')
+  if (error || !data) throw AppError.internal('Failed to generate logo upload URL', error)
 
   const { data: pub } = supabase.storage.from('company-logos').getPublicUrl(path)
   return {
@@ -254,5 +325,5 @@ export async function removeLogo(accountId: string) {
     logo_url:   null,
     updated_at: new Date().toISOString(),
   })
-  if (error) throw AppError.internal('Failed to clear company logo')
+  if (error) throw AppError.internal('Failed to clear company logo', error)
 }

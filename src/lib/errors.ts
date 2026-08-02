@@ -4,8 +4,8 @@ export class AppError extends Error {
   public readonly details?: unknown
   public readonly isOperational: boolean
 
-  constructor(statusCode: number, message: string, code: string, details?: unknown) {
-    super(message)
+  constructor(statusCode: number, message: string, code: string, details?: unknown, cause?: unknown) {
+    super(message, cause !== undefined ? { cause } : undefined)
     this.name = 'AppError'
     this.statusCode = statusCode
     this.code = code
@@ -38,7 +38,7 @@ export class AppError extends Error {
     return new AppError(422, message, 'UNPROCESSABLE_ENTITY', details)
   }
 
-  static internal(message = 'Internal server error'): AppError {
-    return new AppError(500, message, 'INTERNAL_ERROR')
+  static internal(message = 'Internal server error', cause?: unknown): AppError {
+    return new AppError(500, message, 'INTERNAL_ERROR', undefined, cause)
   }
 }

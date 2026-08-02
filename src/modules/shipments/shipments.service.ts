@@ -1,5 +1,6 @@
 import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
+import { logger } from '../../lib/logger'
 import * as shipmentsRepo from './shipments.repository'
 import * as notificationsService from '../notifications/notifications.service'
 import {
@@ -25,7 +26,7 @@ function cast<T>(record: unknown): T {
 // Fire-and-forget — notifications must never block the main operation.
 function notifyUser(
   userId:   string,
-  type:     'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled',
+  type:     'shipment_created' | 'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled',
   title:    string,
   body:     string,
   entityId: string,
@@ -106,7 +107,7 @@ export async function listShipments(
   companyRole?: string | null,
 ) {
   const { data, count, error } = await shipmentsRepo.findAll(query, accountId, isAdmin, userId, companyRole)
-  if (error) throw AppError.internal('Failed to fetch shipments')
+  if (error) throw AppError.internal('Failed to fetch shipments', error)
   return { shipments: data ?? [], total: count ?? 0 }
 }
 
@@ -133,12 +134,13 @@ export async function createShipment(
 
   if (creatorRole === 'shipper') {
     // Shipping company creates load → auto-assign to their account
-    const { data: profile } = await supabase
+    const { data: profile, error: profileErr } = await supabase
       .from('profiles')
       .select('account_id')
       .eq('id', createdBy)
       .single()
-    resolvedAccountId = profile?.account_id ?? null
+    if (profileErr || !profile) throw AppError.internal('Failed to resolve your company account', profileErr)
+    resolvedAccountId = profile.account_id ?? null
   } else if (dto.accountId) {
     // Admin pre-assigns to a shipping company
     const { data: account, error: accountErr } = await supabase
@@ -188,8 +190,25 @@ export async function createShipment(
     created_by: createdBy,
   })
 
-  if (error) {console.error(error)
-    throw AppError.internal('Failed to create shipment')}
+  if (error) throw AppError.internal('Failed to create shipment', error)
+
+  // A company already attached at creation time (the normal admin flow — no
+  // separate /assign call follows) should notify that company right away,
+  // same as assignToCompany does for the explicit-assign-later flow.
+  if (resolvedAccountId) {
+    const shipmentId = (data as ShipmentRow).shipment_id as string
+    const { data: admins } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('account_id', resolvedAccountId)
+      .eq('company_role', 'company_admin')
+      .neq('id', createdBy)
+
+    for (const admin of admins ?? []) {
+      notifyUser(admin.id, 'shipment_created', 'New load created', 'A new load has been created for your company.', shipmentId)
+    }
+  }
+
   return data
 }
 
@@ -251,7 +270,7 @@ export async function updateShipment(
   if (dto.referenceNumber     !== undefined) updates.reference_number     = dto.referenceNumber
 
   const { data, error } = await shipmentsRepo.updateById(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update shipment')
+  if (error || !data) throw AppError.internal('Failed to update shipment', error)
   return data
 }
 
@@ -282,29 +301,40 @@ export async function updateStatus(
   }
 
   const { data, error } = await shipmentsRepo.updateById(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update status')
+  if (error || !data) throw AppError.internal('Failed to update status', error)
 
   if (dto.reason || userId !== (shipment.created_by as string)) {
-    await shipmentsRepo.insertStatusHistoryEntry({
+    const { error: historyError } = await shipmentsRepo.insertStatusHistoryEntry({
       shipmentId: id,
       oldStatus:  currentStatus,
       newStatus:  dto.status,
       changedBy:  userId,
       reason:     dto.reason,
     })
+    if (historyError) {
+      logger.error('Failed to write shipment status history entry', { shipmentId: id, error: historyError.message })
+    }
   }
 
-  const creatorId = shipment.created_by as string
-  if (dto.status === 'picked_up') {
-    notifyUser(creatorId, 'shipment_picked_up', 'Shipment picked up', 'Your shipment has been picked up.', id)
-  } else if (dto.status === 'in_transit') {
-    notifyUser(creatorId, 'shipment_in_transit', 'Shipment in transit', 'Your shipment is now in transit.', id)
-  } else if (dto.status === 'out_for_delivery') {
-    notifyUser(creatorId, 'shipment_out_for_delivery', 'Out for delivery', 'Your shipment is out for delivery.', id)
-  } else if (dto.status === 'delivered') {
-    notifyUser(creatorId, 'shipment_delivered', 'Shipment delivered', 'Your shipment has been delivered.', id)
-  } else if (dto.status === 'cancelled') {
-    notifyUser(creatorId, 'shipment_cancelled', 'Shipment cancelled', 'Your shipment has been cancelled.', id)
+  const creatorId  = shipment.created_by as string
+  const loadNumber = (shipment.load_number as string | undefined) ?? id
+
+  const STATUS_MESSAGES: Partial<Record<string, { type: 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled'; title: string; shipperBody: string; adminBody: string }>> = {
+    picked_up:         { type: 'shipment_picked_up',         title: 'Shipment picked up',   shipperBody: 'Your shipment has been picked up.',   adminBody: `Load ${loadNumber} was marked picked up.` },
+    in_transit:        { type: 'shipment_in_transit',        title: 'Shipment in transit',  shipperBody: 'Your shipment is now in transit.',    adminBody: `Load ${loadNumber} is now in transit.` },
+    out_for_delivery:  { type: 'shipment_out_for_delivery',  title: 'Out for delivery',      shipperBody: 'Your shipment is out for delivery.',  adminBody: `Load ${loadNumber} is out for delivery.` },
+    delivered:         { type: 'shipment_delivered',         title: 'Shipment delivered',   shipperBody: 'Your shipment has been delivered.',   adminBody: `Load ${loadNumber} has been delivered.` },
+    cancelled:         { type: 'shipment_cancelled',         title: 'Shipment cancelled',   shipperBody: 'Your shipment has been cancelled.',   adminBody: `Load ${loadNumber} was cancelled.` },
+  }
+
+  const statusMsg = STATUS_MESSAGES[dto.status]
+  if (statusMsg) {
+    notifyUser(creatorId, statusMsg.type, statusMsg.title, statusMsg.shipperBody, id)
+    // Shipper/employee-initiated status changes also alert platform admins;
+    // an admin performing the change already knows, so skip the self-alert.
+    if (!isAdmin) {
+      void notificationsService.notifyAllAdmins(statusMsg.type, statusMsg.title, statusMsg.adminBody, 'shipment', id)
+    }
   }
 
   return data
@@ -354,7 +384,7 @@ export async function assignToCompany(
   const { data, error } = await shipmentsRepo.updateById(shipmentId, {
     account_id: dto.accountId,
   })
-  if (error || !data) throw AppError.internal('Failed to assign shipment')
+  if (error || !data) throw AppError.internal('Failed to assign shipment', error)
 
   // Notify all company admins of the assignment
   const { data: admins } = await supabase
@@ -408,7 +438,7 @@ export async function assignToEmployee(
   const { data, error } = await shipmentsRepo.updateById(shipmentId, {
     assigned_employee_id: dto.employeeId,
   })
-  if (error || !data) throw AppError.internal('Failed to assign employee')
+  if (error || !data) throw AppError.internal('Failed to assign employee', error)
 
   return data
 }
@@ -432,14 +462,17 @@ export async function deleteShipment(
     )
   }
 
-  await shipmentsRepo.insertStatusHistoryEntry({
+  const { error } = await shipmentsRepo.softDeleteById(id)
+  if (error) throw AppError.internal('Failed to delete shipment', error)
+
+  const { error: historyError } = await shipmentsRepo.insertStatusHistoryEntry({
     shipmentId: id,
     oldStatus:  currentStatus,
     newStatus:  'cancelled',
     changedBy:  userId,
     reason:     `[DELETED] ${dto.reason}`,
   })
-
-  const { error } = await shipmentsRepo.softDeleteById(id)
-  if (error) throw AppError.internal('Failed to delete shipment')
+  if (historyError) {
+    logger.error('Shipment deleted but failed to write audit history entry', { shipmentId: id, error: historyError.message })
+  }
 }

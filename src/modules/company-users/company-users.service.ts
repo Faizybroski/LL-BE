@@ -2,7 +2,21 @@ import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import { logger } from '../../lib/logger'
 import * as companyUsersRepo from './company-users.repository'
+import * as notificationsService from '../notifications/notifications.service'
 import type { CreateEmployeeDto, UpdateEmployeeDto, ListEmployeesQuery } from './company-users.schema'
+
+// Fire-and-forget — notifications must never block the main operation.
+function notifyUser(
+  userId:   string,
+  type:     'employee_created' | 'employee_updated',
+  title:    string,
+  body:     string,
+  entityId: string,
+): void {
+  void notificationsService
+    .createNotification({ userId, type, title, body, entityType: 'employee', entityId })
+    .catch(() => undefined)
+}
 
 // ── List employees ────────────────────────────────────────────────────────────
 export async function listEmployees(accountId: string, query: ListEmployeesQuery) {
@@ -11,7 +25,7 @@ export async function listEmployees(accountId: string, query: ListEmployeesQuery
     query.page,
     query.limit,
   )
-  if (error) throw AppError.internal('Failed to fetch employees')
+  if (error) throw AppError.internal('Failed to fetch employees', error)
 
   // Enrich with email from auth.users
   const profiles = data ?? []
@@ -75,10 +89,23 @@ export async function createEmployee(dto: CreateEmployeeDto, accountId: string) 
   if (profileErr) {
     logger.error('Failed to update employee profile after creation', { userId, error: profileErr.message })
     await supabase.auth.admin.deleteUser(userId)
-    throw AppError.internal('Failed to set up employee profile')
+    throw AppError.internal('Failed to set up employee profile', profileErr)
   }
 
-  const { data: profile } = await companyUsersRepo.findEmployeeById(userId, accountId)
+  const { data: profile, error: refetchErr } = await companyUsersRepo.findEmployeeById(userId, accountId)
+  if (refetchErr || !profile) {
+    logger.error('Employee created but failed to re-fetch profile', { userId, error: refetchErr?.message })
+    throw AppError.internal('Employee created but the profile could not be loaded — refresh to see it', refetchErr)
+  }
+
+  void notificationsService.notifyAllAdmins(
+    'employee_created',
+    'New employee added',
+    `${dto.fullName} was added as an employee.`,
+    'employee',
+    userId,
+  )
+
   return { ...profile, email: dto.email }
 }
 
@@ -94,7 +121,16 @@ export async function updateEmployee(id: string, dto: UpdateEmployeeDto, account
   if (dto.isActive !== undefined) updates.is_active = dto.isActive
 
   const { data, error } = await companyUsersRepo.updateEmployee(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update employee')
+  if (error || !data) throw AppError.internal('Failed to update employee', error)
+
+  void notificationsService.notifyAllAdmins(
+    'employee_updated',
+    'Employee updated',
+    `${data.full_name as string} (employee) was updated.`,
+    'employee',
+    id,
+  )
+  notifyUser(id, 'employee_updated', 'Your profile was updated', 'Your employee profile was updated by your company admin.', id)
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)
   return { ...data, email: authUser.user?.email ?? '' }

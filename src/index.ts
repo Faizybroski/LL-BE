@@ -2,6 +2,13 @@ import './lib/env' // validate env at startup before anything else
 import { createApp } from './app'
 import { env } from './lib/env'
 import { logger } from './lib/logger'
+import { registerProcessDiagnostics } from './lib/process-diagnostics'
+
+// DIAGNOSTIC ONLY — additive listeners for the intermittent-500 investigation.
+// Does not change the existing uncaughtException/unhandledRejection handlers
+// or shutdown behavior below; Node calls all registered listeners for an
+// event, so both the original and this diagnostic one will fire.
+registerProcessDiagnostics('local-index')
 
 const app = createApp()
 

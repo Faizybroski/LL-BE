@@ -108,7 +108,13 @@ export async function duplicate(req: Request, res: Response, next: NextFunction)
 
 export async function generatePdf(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const result = await service.generatePdf(param(req, 'id'))
+    const result = await service.generatePdf(
+      param(req, 'id'),
+      req.user!.role,
+      req.user!.accountId,
+      req.user!.id,
+      req.user!.companyRole,
+    )
     ok(res, result, 'PDF generated')
   } catch (err) {
     next(err)

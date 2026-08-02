@@ -71,7 +71,7 @@ export async function listCases(
 ) {
   const createdBy = callerRole === 'shipper' ? callerId : undefined
   const { data, count, error } = await repo.findAll(query, createdBy)
-  if (error) throw AppError.internal('Failed to fetch support cases')
+  if (error) throw AppError.internal('Failed to fetch support cases', error)
 
   // Admin manages cases system-wide — surface who raised each one so cases
   // aren't indistinguishable in the table. Shippers only ever see their own
@@ -122,7 +122,12 @@ export async function getCase(
 }
 
 export async function createCase(dto: CreateCaseDto, createdBy: string, callerRole: string) {
-  const accountId = callerRole === 'shipper' ? await repo.findAccountIdByUserId(createdBy) : null
+  let accountId: string | null = null
+  if (callerRole === 'shipper') {
+    const { data: profile, error: profileErr } = await repo.findAccountIdByUserId(createdBy)
+    if (profileErr) throw AppError.internal('Failed to resolve account for support case', profileErr)
+    accountId = (profile?.account_id as string | null) ?? null
+  }
 
   const { data: caseRow, error } = await repo.create({
     account_id:  accountId,
@@ -130,7 +135,7 @@ export async function createCase(dto: CreateCaseDto, createdBy: string, callerRo
     subject:     dto.subject,
     description: dto.description,
   })
-  if (error || !caseRow) throw AppError.internal('Failed to create support case')
+  if (error || !caseRow) throw AppError.internal('Failed to create support case', error)
 
   await repo.createEvent({ case_id: caseRow.case_id, event_type: 'created', created_by: createdBy })
 
@@ -144,12 +149,12 @@ export async function updateCaseStatus(
 ) {
   if (callerRole !== 'admin') throw AppError.forbidden('Only support staff can change case status')
 
-  const { data: existing } = await repo.findById(id)
-  if (!existing) throw AppError.notFound('Support case')
+  const { data: existing, error: findErr } = await repo.findById(id)
+  if (findErr || !existing) throw AppError.notFound('Support case')
   if (existing.status === dto.status) return existing
 
   const { data: updated, error } = await repo.updateStatus(id, dto.status)
-  if (error || !updated) throw AppError.internal('Failed to update case status')
+  if (error || !updated) throw AppError.internal('Failed to update case status', error)
 
   await repo.createEvent({
     case_id:     id,
@@ -177,8 +182,8 @@ export async function updateCase(
   callerId: string,
   callerRole: string,
 ) {
-  const { data: existing } = await repo.findById(id)
-  if (!existing) throw AppError.notFound('Support case')
+  const { data: existing, error: findErr } = await repo.findById(id)
+  if (findErr || !existing) throw AppError.notFound('Support case')
   assertCanAccessCase(existing, callerRole, callerId)
 
   if (callerRole !== 'admin' && !OPEN_STATUSES.has(existing.status)) {
@@ -190,7 +195,7 @@ export async function updateCase(
   if (dto.description !== undefined) patch.description = dto.description
 
   const { data: updated, error } = await repo.update(id, patch)
-  if (error || !updated) throw AppError.internal('Failed to update support case')
+  if (error || !updated) throw AppError.internal('Failed to update support case', error)
   return updated
 }
 
@@ -198,11 +203,11 @@ export async function updateCase(
 export async function deleteCase(id: string, callerRole: string) {
   if (callerRole !== 'admin') throw AppError.forbidden('Only support staff can delete cases')
 
-  const { data: existing } = await repo.findById(id)
-  if (!existing) throw AppError.notFound('Support case')
+  const { data: existing, error: findErr } = await repo.findById(id)
+  if (findErr || !existing) throw AppError.notFound('Support case')
 
   const { error } = await repo.softDelete(id)
-  if (error) throw AppError.internal('Failed to delete support case')
+  if (error) throw AppError.internal('Failed to delete support case', error)
 }
 
 // ── Comments ──────────────────────────────────────────────────────────────────
@@ -213,20 +218,29 @@ export async function addComment(
   callerId: string,
   callerRole: string,
 ) {
-  const { data: existing } = await repo.findById(id)
-  if (!existing) throw AppError.notFound('Support case')
+  const { data: existing, error: findErr } = await repo.findById(id)
+  if (findErr || !existing) throw AppError.notFound('Support case')
   assertCanAccessCase(existing, callerRole, callerId)
 
   const { data, error } = await repo.createComment({ case_id: id, author_id: callerId, content: dto.content })
-  if (error || !data) throw AppError.internal('Failed to add comment')
+  if (error || !data) throw AppError.internal('Failed to add comment', error)
 
-  // Notify the customer when support staff replies (no equivalent single recipient for the reverse).
+  // Notify the customer when support staff replies...
   if (callerRole === 'admin' && existing.created_by !== callerId) {
     notifyUser(
       existing.created_by as string,
       'support_case_replied',
       'New reply on your support case',
       `Support replied on case ${existing.case_number}.`,
+      id,
+    )
+  } else if (callerRole !== 'admin') {
+    // ...and notify platform admins when the shipper is the one replying.
+    void notificationsService.notifyAllAdmins(
+      'support_case_replied',
+      'New reply on support case',
+      `A customer replied on case ${existing.case_number}.`,
+      'support_case',
       id,
     )
   }
@@ -242,15 +256,15 @@ export async function getAttachmentUploadUrl(
   callerId: string,
   callerRole: string,
 ) {
-  const { data: existing } = await repo.findById(id)
-  if (!existing) throw AppError.notFound('Support case')
+  const { data: existing, error: findErr } = await repo.findById(id)
+  if (findErr || !existing) throw AppError.notFound('Support case')
   assertCanAccessCase(existing, callerRole, callerId)
 
   const safeName = dto.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
   const path = `${id}/${crypto.randomUUID()}-${safeName}`
 
   const { data, error } = await supabase.storage.from(BUCKET).createSignedUploadUrl(path)
-  if (error || !data) throw AppError.internal('Failed to generate upload URL')
+  if (error || !data) throw AppError.internal('Failed to generate upload URL', error)
 
   return { signedUrl: data.signedUrl, token: data.token, path: data.path }
 }
@@ -261,9 +275,16 @@ export async function confirmAttachment(
   callerId: string,
   callerRole: string,
 ) {
-  const { data: existing } = await repo.findById(id)
-  if (!existing) throw AppError.notFound('Support case')
+  const { data: existing, error: findErr } = await repo.findById(id)
+  if (findErr || !existing) throw AppError.notFound('Support case')
   assertCanAccessCase(existing, callerRole, callerId)
+
+  // getAttachmentUploadUrl always mints paths as `${caseId}/...` — reject
+  // anything else so a caller can't point this at another case's object
+  // (or anyone else's file in the bucket) and get a signed URL for it.
+  if (!dto.filePath.startsWith(`${id}/`)) {
+    throw AppError.badRequest('Invalid file path for this case')
+  }
 
   const { data, error } = await repo.createAttachment({
     case_id:     id,
@@ -272,7 +293,7 @@ export async function confirmAttachment(
     file_path:   dto.filePath,
     ...(dto.fileSize !== undefined && { file_size: dto.fileSize }),
   })
-  if (error || !data) throw AppError.internal('Failed to record attachment')
+  if (error || !data) throw AppError.internal('Failed to record attachment', error)
 
   await repo.createEvent({
     case_id:    id,

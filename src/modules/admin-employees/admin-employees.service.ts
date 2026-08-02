@@ -2,6 +2,7 @@ import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import { logger } from '../../lib/logger'
 import * as adminEmployeesRepo from './admin-employees.repository'
+import * as notificationsService from '../notifications/notifications.service'
 import type { CreateAdminEmployeeDto, UpdateAdminEmployeeDto, ListAdminEmployeesQuery } from './admin-employees.schema'
 
 // The permission that gates this whole module ('employees.view'/'create'/'edit') is
@@ -16,7 +17,7 @@ interface RequestingUser {
 // ── List employees ────────────────────────────────────────────────────────────
 export async function listAdminEmployees(query: ListAdminEmployeesQuery) {
   const { data, count, error } = await adminEmployeesRepo.findAdminEmployees(query.page, query.limit)
-  if (error) throw AppError.internal('Failed to fetch employees')
+  if (error) throw AppError.internal('Failed to fetch employees', error)
 
   const profiles = data ?? []
   const emailMap: Record<string, string> = {}
@@ -86,10 +87,23 @@ export async function createAdminEmployee(requestingUser: RequestingUser, dto: C
   if (profileErr) {
     logger.error('Failed to update admin employee profile after creation', { userId, error: profileErr.message })
     await supabase.auth.admin.deleteUser(userId)
-    throw AppError.internal('Failed to set up employee profile')
+    throw AppError.internal('Failed to set up employee profile', profileErr)
   }
 
-  const { data: profile } = await adminEmployeesRepo.findAdminEmployeeById(userId)
+  const { data: profile, error: refetchErr } = await adminEmployeesRepo.findAdminEmployeeById(userId)
+  if (refetchErr || !profile) {
+    logger.error('Employee created but failed to re-fetch profile', { userId, error: refetchErr?.message })
+    throw AppError.internal('Employee created but the profile could not be loaded — refresh to see it', refetchErr)
+  }
+
+  void notificationsService.notifyAllAdmins(
+    'admin_employee_created',
+    'New internal employee added',
+    `${dto.fullName} was added as an internal (${dto.adminRole}) employee.`,
+    'admin_employee',
+    userId,
+  )
+
   return { ...profile, email: dto.email }
 }
 
@@ -147,7 +161,15 @@ export async function updateAdminEmployee(requestingUser: RequestingUser, id: st
   }
 
   const { data, error } = await adminEmployeesRepo.updateAdminEmployee(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update employee')
+  if (error || !data) throw AppError.internal('Failed to update employee', error)
+
+  void notificationsService.notifyAllAdmins(
+    'admin_employee_updated',
+    'Internal employee updated',
+    `${data.full_name as string} (internal employee) was updated.`,
+    'admin_employee',
+    id,
+  )
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)
   return { ...data, email: authUser.user?.email ?? '' }

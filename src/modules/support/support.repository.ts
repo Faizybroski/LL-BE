@@ -154,6 +154,5 @@ export async function findProfileNamesByIds(userIds: string[]) {
 
 // ── Scoping helpers ────────────────────────────────────────────────────────────
 export async function findAccountIdByUserId(userId: string) {
-  const { data } = await supabase.from('profiles').select('account_id').eq('id', userId).single()
-  return (data?.account_id as string | null) ?? null
+  return supabase.from('profiles').select('account_id').eq('id', userId).maybeSingle()
 }

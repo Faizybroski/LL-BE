@@ -60,14 +60,14 @@ export const createShipmentSchema = z.object({
   estimatedDeliveryDate: z.string().datetime({ offset: true }).optional(),
 
   quotedPrice: z.number().min(0).optional(),
-  currency:    z.string().length(3).default('AUD'),
+  currency:    z.string().length(3).default('CAD'),
 
   specialInstructions: z.string().optional(),
   referenceNumber:     z.string().optional(),
 })
 
 export const updateShipmentSchema = createShipmentSchema
-  .omit({ shipmentType: true, shipperId: true })
+  .omit({ shipmentType: true })
   .extend({
     confirmedPrice:     z.number().min(0).optional(),
     actualPickupDate:   z.string().datetime({ offset: true }).optional(),

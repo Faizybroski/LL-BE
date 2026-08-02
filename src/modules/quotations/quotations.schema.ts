@@ -39,7 +39,14 @@ export const createQuotationSchema = z.object({
   taxRate:         z.coerce.number().min(0).max(1).default(0),
   tax:             z.coerce.number().min(0).default(0),
   total:           z.coerce.number().min(0).default(0),
-  currency:        z.string().length(3).default('AUD'),
+  currency:        z.string().length(3).default('CAD'),
+  originAddress:      z.string().max(500).optional().nullable(),
+  originLat:          z.coerce.number().optional().nullable(),
+  originLng:          z.coerce.number().optional().nullable(),
+  destinationAddress: z.string().max(500).optional().nullable(),
+  destinationLat:     z.coerce.number().optional().nullable(),
+  destinationLng:     z.coerce.number().optional().nullable(),
+  distanceKm:         z.coerce.number().min(0).optional().nullable(),
   items:           z.array(lineItemSchema).min(0).default([]),
 })
 

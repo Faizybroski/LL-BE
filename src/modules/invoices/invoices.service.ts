@@ -60,7 +60,7 @@ export async function listInvoices(
   const accountId  = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
   const employeeId = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
   const { data, count, error } = await repo.findAll(query, accountId, employeeId)
-  if (error) throw AppError.internal('Failed to fetch invoices')
+  if (error) throw AppError.internal('Failed to fetch invoices', error)
   return { invoices: data ?? [], total: count ?? 0 }
 }
 
@@ -85,6 +85,8 @@ export async function getInvoice(
       if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
         throw AppError.forbidden()
       }
+    } else {
+      throw AppError.forbidden()
     }
   }
 
@@ -119,17 +121,27 @@ export async function createInvoice(dto: CreateInvoiceDto, createdBy: string) {
     total,
     amount_paid:          amountPaid,
     balance_due:          balanceDue,
-    currency:             dto.currency ?? 'AUD',
+    currency:             dto.currency ?? 'CAD',
   })
 
-  if (error || !invoice) {
-    console.error(error) 
-    throw AppError.internal('Failed to create invoice')}
+  if (error || !invoice) throw AppError.internal('Failed to create invoice', error)
 
   if (items.length > 0) {
     const rows = itemsToRows(invoice.id, items)
     const { error: itemsError } = await repo.upsertItems(invoice.id, rows)
-    if (itemsError) throw AppError.internal('Failed to save invoice items')
+    if (itemsError) throw AppError.internal('Failed to save invoice items', itemsError)
+  }
+
+  if (dto.status === 'unpaid') {
+    const invoiceNumber = invoice.invoice_number as string
+    notifyUser(dto.profileId, 'invoice_issued', 'New invoice issued', `Invoice ${invoiceNumber} is ready.`, invoice.id)
+    void notificationsService.notifyAllAdmins(
+      'invoice_issued',
+      'Invoice issued',
+      `Invoice ${invoiceNumber} was issued to a shipper.`,
+      'invoice',
+      invoice.id,
+    )
   }
 
   const { data: full } = await repo.findById(invoice.id)
@@ -160,6 +172,8 @@ export async function updateInvoice(
       if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
         throw AppError.forbidden()
       }
+    } else {
+      throw AppError.forbidden()
     }
   }
 
@@ -193,11 +207,12 @@ export async function updateInvoice(
   if (dto.currency            !== undefined) patch.currency             = dto.currency
 
   const { data: updated, error } = await repo.update(id, patch)
-  if (error || !updated) throw AppError.internal('Failed to update invoice')
+  if (error || !updated) throw AppError.internal('Failed to update invoice', error)
 
   if (dto.items !== undefined) {
     const rows = itemsToRows(id, items as CreateInvoiceDto['items'])
-    await repo.upsertItems(id, rows)
+    const { error: itemsError } = await repo.upsertItems(id, rows)
+    if (itemsError) throw AppError.internal('Failed to save invoice items', itemsError)
   }
 
   if (dto.status !== undefined && dto.status !== existing.status) {
@@ -238,11 +253,13 @@ export async function deleteInvoice(
       if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
         throw AppError.forbidden()
       }
+    } else {
+      throw AppError.forbidden()
     }
   }
 
   const { error } = await repo.softDelete(id)
-  if (error) throw AppError.internal('Failed to delete invoice')
+  if (error) throw AppError.internal('Failed to delete invoice', error)
 }
 
 export async function duplicateInvoice(id: string, createdBy: string) {
@@ -326,9 +343,16 @@ export async function convertFromQuotation(quotationId: string, createdBy: strin
   return createInvoice(dto, createdBy)
 }
 
-export async function generatePdf(id: string) {
-  const { data } = await repo.findById(id)
-  if (!data) throw AppError.notFound('Invoice')
+export async function generatePdf(
+  id: string,
+  callerRole: string,
+  callerAccountId?: string | null,
+  callerId?: string,
+  companyRole?: string | null,
+) {
+  // Reuses getInvoice's ownership check — draft-status gating doesn't apply
+  // here (PDFs are downloadable at any status), only tenant ownership does.
+  const data = await getInvoice(id, callerRole, callerAccountId, callerId, companyRole)
 
   const pdfUrl = await generateAndUploadInvoicePdf(data)
   await repo.updatePdfUrl(id, pdfUrl)

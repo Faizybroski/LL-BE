@@ -15,6 +15,7 @@
   "env": {
     "ALLOWED_ORIGINS": "https://logical-links.vercel.app",
     "TRUST_PROXY": "1",
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "LOG_LEVEL": "debug"
   }
 }

@@ -47,18 +47,23 @@ export async function updateProfile(id: string, dto: UpdateProfileDto) {
 
 export async function listUsers(query: ListUsersQuery) {
   const { data, count, error } = await usersRepo.findAll(query)
-  if (error) throw AppError.internal('Failed to list users')
+  if (error) throw AppError.internal('Failed to list users', error)
 
   const rows = (data ?? []) as Record<string, unknown>[]
 
-  // Batch-fetch emails from auth.users for all returned profiles
-  const { data: { users: authUsers } = { users: [] } } =
-    await supabase.auth.admin.listUsers({ perPage: 1000 })
-
-  const emailMap = new Map(authUsers.map((u) => [u.id, u.email ?? '']))
+  // Per-row email lookup (same pattern as company-users/admin-employees list
+  // endpoints) — avoids listUsers()'s hard 1000-user cap, which silently
+  // dropped emails for any tenant with more than 1000 auth users.
+  const emailMap: Record<string, string> = {}
+  await Promise.all(
+    rows.map(async (row) => {
+      const { data: authUser } = await supabase.auth.admin.getUserById(row.id as string)
+      if (authUser.user?.email) emailMap[row.id as string] = authUser.user.email
+    }),
+  )
 
   const users = rows.map((row) =>
-    formatProfile(row, emailMap.get(row.id as string)),
+    formatProfile(row, emailMap[row.id as string]),
   )
 
   return { users, total: count ?? 0 }
@@ -95,7 +100,7 @@ export async function getAvatarUploadUrl(userId: string) {
   const { data, error } = await supabase.storage
     .from('profile-avatars')
     .createSignedUploadUrl(path)
-  if (error || !data) throw AppError.internal('Failed to generate avatar upload URL')
+  if (error || !data) throw AppError.internal('Failed to generate avatar upload URL', error)
 
   const { data: pub } = supabase.storage.from('profile-avatars').getPublicUrl(path)
   return {
@@ -112,7 +117,7 @@ export async function removeAvatar(userId: string) {
     avatar_url: null,
     updated_at: new Date().toISOString(),
   })
-  if (error) throw AppError.internal('Failed to clear avatar')
+  if (error) throw AppError.internal('Failed to clear avatar', error)
 }
 
 export async function approveUser(id: string, dto: ApproveUserDto) {

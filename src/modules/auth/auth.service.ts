@@ -79,7 +79,7 @@ async function issueTokenPair(
 
   if (error) {
     logger.error('Failed to persist refresh token', { userId, error: error.message })
-    throw AppError.internal('Failed to establish session')
+    throw AppError.internal('Failed to establish session', error)
   }
 
   return {
@@ -121,7 +121,7 @@ export async function login(
 
   if (profileError || !profile) {
     logger.error('Profile missing for authenticated user', { userId: data.user.id })
-    throw AppError.internal('User profile not found')
+    throw AppError.internal('User profile not found', profileError)
   }
 
   if (!profile.is_active) {
@@ -211,7 +211,7 @@ export async function enrollMfa(userId: string) {
 
   const secret = generateTotpSecret()
   const { error } = await authRepo.setPendingMfaSecret(userId, secret)
-  if (error) throw AppError.internal('Failed to start MFA enrollment')
+  if (error) throw AppError.internal('Failed to start MFA enrollment', error)
 
   const { otpauthUrl, qrCodeDataUrl } = await buildProvisioningQrCode(authUser.user.email, secret)
   return { secret, otpauthUrl, qrCodeDataUrl }
@@ -229,7 +229,7 @@ export async function verifyMfaEnrollment(userId: string, dto: MfaCodeDto) {
   }
 
   const { error: enableError } = await authRepo.enableMfa(userId)
-  if (enableError) throw AppError.internal('Failed to enable MFA')
+  if (enableError) throw AppError.internal('Failed to enable MFA', enableError)
 
   return { message: 'MFA enabled' }
 }
@@ -254,7 +254,7 @@ export async function disableMfaForUser(userId: string, dto: MfaDisableDto) {
   }
 
   const { error: disableError } = await authRepo.disableMfa(userId)
-  if (disableError) throw AppError.internal('Failed to disable MFA')
+  if (disableError) throw AppError.internal('Failed to disable MFA', disableError)
 
   return { message: 'MFA disabled' }
 }
@@ -268,7 +268,7 @@ export async function getMfaStatus(userId: string) {
 // ── Sessions ───────────────────────────────────────────────────────────────────
 export async function listSessions(userId: string, currentRefreshToken?: string) {
   const { data, error } = await authRepo.findActiveSessionsByUser(userId)
-  if (error) throw AppError.internal('Failed to fetch sessions')
+  if (error) throw AppError.internal('Failed to fetch sessions', error)
 
   const currentHash = currentRefreshToken ? hashRefreshToken(currentRefreshToken) : null
 
@@ -290,7 +290,8 @@ export async function revokeSession(userId: string, tokenId: string) {
     throw AppError.notFound('Session')
   }
   if (!session.is_revoked) {
-    await authRepo.revokeRefreshToken(tokenId)
+    const { error: revokeError } = await authRepo.revokeRefreshToken(tokenId)
+    if (revokeError) throw AppError.internal('Failed to revoke session', revokeError)
   }
 }
 
@@ -310,7 +311,11 @@ export async function refresh(
   const tokenHash = hashRefreshToken(dto.refreshToken)
 
   // First check: does this hash match ANY token (revoked or not)?
-  const { data: anyToken } = await authRepo.findRefreshTokenByHash(tokenHash)
+  const { data: anyToken, error: findTokenError } = await authRepo.findRefreshTokenByHash(tokenHash)
+  if (findTokenError) {
+    logger.error('Failed to look up refresh token', { error: findTokenError.message })
+    throw AppError.internal('Failed to process refresh token', findTokenError)
+  }
 
   if (!anyToken) {
     // Token is completely unknown — forged or from a different environment
@@ -329,7 +334,8 @@ export async function refresh(
       userId: anyToken.user_id,
       ipAddress: context.ipAddress,
     })
-    await authRepo.revokeAllUserTokens(anyToken.user_id)
+    const { error: revokeAllError } = await authRepo.revokeAllUserTokens(anyToken.user_id)
+    if (revokeAllError) logger.error('Failed to revoke all sessions after reuse detection', { userId: anyToken.user_id, error: revokeAllError.message })
     throw AppError.unauthorized('Session invalidated — please log in again')
   }
 
@@ -343,7 +349,8 @@ export async function refresh(
   // If issueTokenPair fails, the old token is already gone — client must re-login.
   // This is intentional: it's safer to force a re-login than to keep a potentially
   // compromised token alive.
-  await authRepo.revokeRefreshToken(anyToken.token_id)
+  const { error: rotateError } = await authRepo.revokeRefreshToken(anyToken.token_id)
+  if (rotateError) throw AppError.internal('Failed to rotate refresh token', rotateError)
 
   // Fetch fresh user data — role may have changed since last login
   const { data: profile, error: profileError } = await supabase
@@ -367,22 +374,26 @@ export async function refresh(
 export async function logout(userId: string, dto: LogoutDto) {
   if (dto.allDevices) {
     // Revoke every active session for this user
-    await authRepo.revokeAllUserTokens(userId)
+    const { error } = await authRepo.revokeAllUserTokens(userId)
+    if (error) throw AppError.internal('Failed to log out from all devices', error)
     return { message: 'Logged out from all devices' }
   }
 
   if (dto.refreshToken) {
     // Revoke only the specific token that was passed
     const tokenHash = hashRefreshToken(dto.refreshToken)
-    const { data: token } = await authRepo.findRefreshTokenByHash(tokenHash)
+    const { data: token, error: findError } = await authRepo.findRefreshTokenByHash(tokenHash)
+    if (findError) throw AppError.internal('Failed to log out', findError)
     if (token && token.user_id === userId) {
-      await authRepo.revokeRefreshToken(token.token_id)
+      const { error: revokeError } = await authRepo.revokeRefreshToken(token.token_id)
+      if (revokeError) throw AppError.internal('Failed to log out', revokeError)
     }
     return { message: 'Logged out successfully' }
   }
 
   // No token provided: revoke all as a safe fallback
-  await authRepo.revokeAllUserTokens(userId)
+  const { error } = await authRepo.revokeAllUserTokens(userId)
+  if (error) throw AppError.internal('Failed to log out', error)
   return { message: 'Logged out successfully' }
 }
 
@@ -475,18 +486,18 @@ export async function register(
     }
     // Foreign-key violation: created_by ref is somehow invalid
     if (pgCode === '23503') {
-      throw AppError.internal('Failed to link company account to your user — please try again')
+      throw AppError.internal('Failed to link company account to your user — please try again', accountError)
     }
     // Insufficient privilege (would only happen if service-role key is misconfigured)
     if (pgCode === '42501') {
-      throw AppError.internal('Server configuration error: insufficient database permissions')
+      throw AppError.internal('Server configuration error: insufficient database permissions', accountError)
     }
     // Not-null violation: a required column is missing a value
     if (pgCode === '23502') {
       throw AppError.badRequest(`Company account is missing a required field: ${pgDetails ?? pgMessage}`)
     }
 
-    throw AppError.internal('Failed to create company account — please try again or contact support')
+    throw AppError.internal('Failed to create company account — please try again or contact support', accountError)
   }
 
   // Link the profile to the new account, set company_admin role, and persist phone
@@ -496,7 +507,21 @@ export async function register(
   }
   if (dto.phone) profileUpdates.phone = dto.phone
 
-  await supabase.from('profiles').update(profileUpdates).eq('id', userId)
+  const { error: profileLinkError } = await supabase.from('profiles').update(profileUpdates).eq('id', userId)
+
+  if (profileLinkError) {
+    logger.error('Failed to link profile to new company account during registration', {
+      userId,
+      accountId: account.account_id,
+      error: profileLinkError.message,
+    })
+    // Best-effort cleanup — without this the auth user and accounts row are
+    // both orphaned: the user would be logged in with a token claiming
+    // company-admin access to an account they aren't actually linked to.
+    await supabase.from('accounts').delete().eq('account_id', account.account_id)
+    await supabase.auth.admin.deleteUser(userId)
+    throw AppError.internal('Failed to complete registration — please try again', profileLinkError)
+  }
 
   // Issue a token pair so the client can be logged in immediately after registration
   const tokens = await issueTokenPair(
@@ -559,11 +584,14 @@ export async function changePassword(userId: string, dto: ChangePasswordDto) {
     password: dto.newPassword,
   })
 
-  if (updateError) throw AppError.internal('Failed to update password')
+  if (updateError) throw AppError.internal('Failed to update password', updateError)
 
   // Revoke all existing sessions — forcing re-login everywhere
   // This is best practice after a password change.
-  await authRepo.revokeAllUserTokens(userId)
+  const { error: revokeError } = await authRepo.revokeAllUserTokens(userId)
+  if (revokeError) {
+    logger.error('Failed to revoke sessions after password change', { userId, error: revokeError.message })
+  }
 
   return { message: 'Password changed. Please log in again.' }
 }

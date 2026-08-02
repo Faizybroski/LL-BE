@@ -219,6 +219,23 @@ export async function update(id: string, data: Record<string, unknown>) {
     .single()
 }
 
+// Status-guarded update — only writes if the row is still in `expectedStatus`
+// at write time. Closes the accept/decline TOCTOU race: two concurrent
+// requests both reading status='sent' would otherwise both pass the
+// service-layer check and both write. `.maybeSingle()` so "someone else
+// already changed it" (0 rows matched) comes back as `data: null` instead
+// of throwing a Postgrest "no rows" error.
+export async function updateIfStatus(id: string, expectedStatus: string, data: Record<string, unknown>) {
+  return supabase
+    .from(TABLE)
+    .update(data)
+    .eq('id', id)
+    .eq('status', expectedStatus)
+    .is('deleted_at', null)
+    .select(QUOTATION_SELECT)
+    .maybeSingle()
+}
+
 export async function softDelete(id: string) {
   return supabase
     .from(TABLE)

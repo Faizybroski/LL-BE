@@ -1,22 +1,23 @@
 import { AppError } from '../../lib/errors'
 import * as statusesRepo from './statuses.repository'
+import * as notificationsService from '../notifications/notifications.service'
 import { toSlug, SYSTEM_STATUS_SLUGS, type CreateStatusDto, type UpdateStatusDto, type ListStatusesQuery } from './statuses.schema'
 
 export async function listStatuses(query: ListStatusesQuery) {
   const { data, count, error } = await statusesRepo.findAll(query)
-  if (error) throw AppError.internal('Failed to fetch statuses')
+  if (error) throw AppError.internal('Failed to fetch statuses', error)
   return { statuses: data ?? [], total: count ?? 0 }
 }
 
 export async function listAllActiveStatuses() {
   const { data, error } = await statusesRepo.findAllActive()
-  if (error) throw AppError.internal('Failed to fetch statuses')
+  if (error) throw AppError.internal('Failed to fetch statuses', error)
   return data ?? []
 }
 
 export async function searchStatuses(search: string) {
   const { data, error } = await statusesRepo.searchByName(search)
-  if (error) throw AppError.internal('Failed to search statuses')
+  if (error) throw AppError.internal('Failed to search statuses', error)
   return data ?? []
 }
 
@@ -41,7 +42,16 @@ export async function createStatus(dto: CreateStatusDto) {
     type:        'custom',
     is_system:   false,
   })
-  if (error) throw AppError.internal('Failed to create status')
+  if (error) throw AppError.internal('Failed to create status', error)
+
+  void notificationsService.notifyAllAdmins(
+    'status_created',
+    'New status added',
+    `Status "${dto.name}" was created.`,
+    'status',
+    data.id as string,
+  )
+
   return data
 }
 
@@ -66,7 +76,16 @@ export async function updateStatus(id: string, dto: UpdateStatusDto) {
   if (dto.is_active   !== undefined) updates.is_active   = dto.is_active
 
   const { data, error } = await statusesRepo.updateById(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update status')
+  if (error || !data) throw AppError.internal('Failed to update status', error)
+
+  void notificationsService.notifyAllAdmins(
+    'status_updated',
+    'Status updated',
+    `Status "${data.name as string}" was updated.`,
+    'status',
+    id,
+  )
+
   return data
 }
 
@@ -76,7 +95,8 @@ export async function deleteStatus(id: string) {
 
   if (existing.is_system) throw AppError.forbidden('System statuses cannot be deleted')
 
-  const { count } = await statusesRepo.countUsage(existing.slug)
+  const { count, error: countErr } = await statusesRepo.countUsage(existing.slug)
+  if (countErr) throw AppError.internal('Failed to check status usage', countErr)
   if ((count ?? 0) > 0) {
     throw AppError.unprocessable(
       'This status is in use by active loads. Disable it instead of deleting.',
@@ -84,5 +104,5 @@ export async function deleteStatus(id: string) {
   }
 
   const { error } = await statusesRepo.softDeleteById(id)
-  if (error) throw AppError.internal('Failed to delete status')
+  if (error) throw AppError.internal('Failed to delete status', error)
 }

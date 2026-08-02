@@ -32,6 +32,9 @@ interface QuotationData {
   total:            number
   currency:         string
   load_id?:         string | null
+  origin_address?:      string | null
+  destination_address?: string | null
+  distance_km?:         number | null
   shipments?:       { load_number: string; origin_city: string; destination_city: string } | null
   profiles?:        { full_name: string | null; email: string } | null
   quotation_items?: LineItem[]
@@ -78,8 +81,8 @@ const COL_W    = PAGE_W - MARGIN * 2
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmt(n: number, currency = 'AUD') {
-  return new Intl.NumberFormat('en-AU', { style: 'currency', currency }).format(n)
+function fmt(n: number, currency = 'CAD') {
+  return new Intl.NumberFormat('en-CA', { style: 'currency', currency }).format(n)
 }
 
 function fmtDate(d?: string | null) {
@@ -143,7 +146,16 @@ function header(
 function customerSection(
   doc: InstanceType<typeof PDFDocument>,
   y: number,
-  data: { customer_name: string; customer_company?: string | null; customer_email?: string | null; customer_phone?: string | null; billing_address?: string | null },
+  data: {
+    customer_name: string
+    customer_company?: string | null
+    customer_email?: string | null
+    customer_phone?: string | null
+    billing_address?: string | null
+    origin_address?: string | null
+    destination_address?: string | null
+    distance_km?: number | null
+  },
   load?: { load_number: string; origin_city: string; destination_city: string } | null,
 ) {
   doc.rect(MARGIN, y, COL_W, 10).fill(LIGHT_BG)
@@ -167,6 +179,23 @@ function customerSection(
   if (data.billing_address) {
     doc.fillColor(GREY).font('Helvetica').fontSize(9).text(data.billing_address, MARGIN, y, { width: 200 })
     y += doc.heightOfString(data.billing_address, { width: 200 }) + 4
+  }
+
+  if (data.origin_address || data.destination_address) {
+    doc.fillColor(DARK).font('Helvetica-Bold').fontSize(8).text('ROUTE', MARGIN, y)
+    y += 12
+    if (data.origin_address) {
+      doc.fillColor(GREY).font('Helvetica').fontSize(9).text(`From: ${data.origin_address}`, MARGIN, y, { width: 200 })
+      y += doc.heightOfString(`From: ${data.origin_address}`, { width: 200 }) + 2
+    }
+    if (data.destination_address) {
+      doc.fillColor(GREY).font('Helvetica').fontSize(9).text(`To: ${data.destination_address}`, MARGIN, y, { width: 200 })
+      y += doc.heightOfString(`To: ${data.destination_address}`, { width: 200 }) + 2
+    }
+    if (data.distance_km != null) {
+      doc.fillColor(GREY).font('Helvetica').fontSize(9).text(`Distance: ${data.distance_km} km`, MARGIN, y)
+      y += 12
+    }
   }
 
   if (load) {

@@ -38,7 +38,7 @@ export const createInvoiceSchema = z.object({
   tax:                 z.coerce.number().min(0).default(0),
   total:               z.coerce.number().min(0).default(0),
   amountPaid:          z.coerce.number().min(0).default(0),
-  currency:            z.string().length(3).default('AUD'),
+  currency:            z.string().length(3).default('CAD'),
   items:               z.array(lineItemSchema).min(0).default([]),
 })
 

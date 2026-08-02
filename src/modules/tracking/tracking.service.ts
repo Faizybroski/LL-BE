@@ -89,7 +89,7 @@ export async function listEvents(
 ) {
   await requireLoadAccess(loadId, isAdmin, accountId, userId, companyRole)
   const { data, count, error } = await trackingRepo.findByLoad(loadId, query)
-  if (error) throw AppError.internal('Failed to fetch tracking events')
+  if (error) throw AppError.internal('Failed to fetch tracking events', error)
   return { events: data ?? [], total: count ?? 0 }
 }
 
@@ -102,7 +102,7 @@ export async function getRecentEvents(
   limit         = 10,
 ) {
   const { data, error } = await trackingRepo.findRecent(isAdmin, accountId, userId, companyRole, limit)
-  if (error) throw AppError.internal('Failed to fetch recent tracking events')
+  if (error) throw AppError.internal('Failed to fetch recent tracking events', error)
   return data ?? []
 }
 
@@ -141,7 +141,7 @@ export async function createEvent(
     event_timestamp: dto.eventTimestamp ?? new Date().toISOString(),
   })
 
-  if (error) throw AppError.internal('Failed to create tracking event')
+  if (error) throw AppError.internal('Failed to create tracking event', error)
 
   // Notify relevant parties (fire-and-forget)
   const shipLoad = cast<Row>(load)
@@ -168,6 +168,11 @@ export async function createEvent(
     for (const admin of companyAdmins ?? []) {
       notifyUser(admin.id, title, body, dto.loadId)
     }
+  }
+
+  // Notify platform admins if a shipper/employee created this event
+  if (!isAdmin) {
+    void notificationsService.notifyAllAdmins('tracking_event_created', title, body, 'shipment', dto.loadId)
   }
 
   return data
@@ -206,7 +211,18 @@ export async function updateEvent(
   if (dto.eventTimestamp !== undefined) updates.event_timestamp = dto.eventTimestamp
 
   const { data, error } = await trackingRepo.updateById(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update tracking event')
+  if (error || !data) throw AppError.internal('Failed to update tracking event', error)
+
+  if (!isAdmin) {
+    void notificationsService.notifyAllAdmins(
+      'tracking_event_updated',
+      'Tracking event updated',
+      'A shipper updated a tracking event.',
+      'shipment',
+      event.load_id as string,
+    )
+  }
+
   return data
 }
 
@@ -233,5 +249,15 @@ export async function deleteEvent(
   }
 
   const { error } = await trackingRepo.deleteById(id)
-  if (error) throw AppError.internal('Failed to delete tracking event')
+  if (error) throw AppError.internal('Failed to delete tracking event', error)
+
+  if (!isAdmin) {
+    void notificationsService.notifyAllAdmins(
+      'tracking_event_deleted',
+      'Tracking event deleted',
+      'A shipper deleted a tracking event.',
+      'shipment',
+      event.load_id as string,
+    )
+  }
 }

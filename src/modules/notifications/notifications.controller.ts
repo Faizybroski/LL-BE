@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import * as notificationsService from './notifications.service'
 import { ok, noContent, parsePagination } from '../../lib/response'
-import { NOTIFICATION_CATEGORIES, type MarkReadDto, type NotificationCategory } from './notifications.schema'
+import { NOTIFICATION_CATEGORIES, type MarkReadDto, type NotificationCategory, type CreateAlertDto } from './notifications.schema'
 
 export async function list(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -41,6 +41,15 @@ export async function markAllRead(req: Request, res: Response, next: NextFunctio
   try {
     await notificationsService.markAllRead(req.user!.id)
     ok(res, null, 'All notifications marked as read')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function createAlert(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await notificationsService.createAlert(req.body as CreateAlertDto)
+    ok(res, result, `Alert sent to ${result.sent} recipient${result.sent === 1 ? '' : 's'}`)
   } catch (err) {
     next(err)
   }

@@ -1,16 +1,17 @@
 import { AppError } from '../../lib/errors'
 import * as locationsRepo from './locations.repository'
+import * as notificationsService from '../notifications/notifications.service'
 import type { CreateLocationDto, UpdateLocationDto, ListLocationsQuery } from './locations.schema'
 
 export async function listLocations(query: ListLocationsQuery) {
   const { data, count, error } = await locationsRepo.findAll(query)
-  if (error) throw AppError.internal('Failed to fetch locations')
+  if (error) throw AppError.internal('Failed to fetch locations', error)
   return { locations: data ?? [], total: count ?? 0 }
 }
 
 export async function searchLocations(search: string) {
   const { data, error } = await locationsRepo.findByCity(search)
-  if (error) throw AppError.internal('Failed to search locations')
+  if (error) throw AppError.internal('Failed to search locations', error)
   return data ?? []
 }
 
@@ -27,7 +28,16 @@ export async function createLocation(dto: CreateLocationDto) {
   }
 
   const { data, error } = await locationsRepo.create({ city: dto.city, province: dto.province })
-  if (error) throw AppError.internal('Failed to create location')
+  if (error) throw AppError.internal('Failed to create location', error)
+
+  void notificationsService.notifyAllAdmins(
+    'location_created',
+    'New location added',
+    `Location "${dto.city}, ${dto.province}" was added.`,
+    'location',
+    data.id as string,
+  )
+
   return data
 }
 
@@ -48,7 +58,16 @@ export async function updateLocation(id: string, dto: UpdateLocationDto) {
   if (dto.province !== undefined) updates.province = dto.province
 
   const { data, error } = await locationsRepo.updateById(id, updates)
-  if (error || !data) throw AppError.internal('Failed to update location')
+  if (error || !data) throw AppError.internal('Failed to update location', error)
+
+  void notificationsService.notifyAllAdmins(
+    'location_updated',
+    'Location updated',
+    `Location "${data.city as string}, ${data.province as string}" was updated.`,
+    'location',
+    id,
+  )
+
   return data
 }
 
@@ -56,7 +75,8 @@ export async function deleteLocation(id: string) {
   const { data: existing } = await locationsRepo.findById(id)
   if (!existing) throw AppError.notFound('Location')
 
-  const { count } = await locationsRepo.countUsage(id)
+  const { count, error: countErr } = await locationsRepo.countUsage(id)
+  if (countErr) throw AppError.internal('Failed to check location usage', countErr)
   if ((count ?? 0) > 0) {
     throw AppError.unprocessable(
       'This location is referenced by tracking events and cannot be deleted. Deactivate it instead.',
@@ -64,5 +84,5 @@ export async function deleteLocation(id: string) {
   }
 
   const { error } = await locationsRepo.softDeleteById(id)
-  if (error) throw AppError.internal('Failed to delete location')
+  if (error) throw AppError.internal('Failed to delete location', error)
 }
