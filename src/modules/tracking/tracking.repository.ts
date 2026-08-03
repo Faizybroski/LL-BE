@@ -44,20 +44,23 @@ export async function findRecent(
   userId?:      string,
   companyRole?: string | null,
   limit         = 10,
+  isResidential = false,
 ) {
   // Use !inner so the embedded-resource filter excludes parent rows
   // that have no matching shipment (dot-notation filters on a plain embed
   // only filter the embedded JSON, not the parent row).
   const embed = isAdmin
-    ? 'shipments!load_id ( shipment_id, load_number, account_id, assigned_employee_id )'
-    : 'shipments!load_id!inner ( shipment_id, load_number, account_id, assigned_employee_id )'
+    ? 'shipments!load_id ( shipment_id, load_number, account_id, customer_id, assigned_employee_id )'
+    : 'shipments!load_id!inner ( shipment_id, load_number, account_id, customer_id, assigned_employee_id )'
 
   let q = supabase
     .from('load_tracking_events')
     .select(`${EVENT_SELECT}, ${embed}`)
 
   if (!isAdmin) {
-    if (companyRole === 'employee' && userId) {
+    if (isResidential && userId) {
+      q = (q as any).eq('shipments.customer_id', userId)
+    } else if (companyRole === 'employee' && userId) {
       q = (q as any).eq('shipments.assigned_employee_id', userId)
     } else if (accountId) {
       q = (q as any).eq('shipments.account_id', accountId)

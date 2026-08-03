@@ -453,6 +453,10 @@ export async function register(
 
   const userId = data.user!.id
 
+  if (dto.accountType === 'residential') {
+    return registerResidential(userId, data.user!.email!, dto, context)
+  }
+
   // Create an account (company) for the new shipper
   const { data: account, error: accountError } = await supabase
     .from('accounts')
@@ -546,6 +550,47 @@ export async function register(
       fullName:    dto.fullName,
       avatarUrl:   null,
       accountId:   account.account_id,
+    },
+  }
+}
+
+// Residential customers have no shipping company — no accounts row, no
+// company_role. Admins later link shipments to them directly via
+// shipments.customer_id.
+async function registerResidential(
+  userId: string,
+  email: string,
+  dto: RegisterDto,
+  context: { ipAddress?: string; userAgent?: string },
+) {
+  const profileUpdates: Record<string, unknown> = { role: 'residential' }
+  if (dto.phone) profileUpdates.phone = dto.phone
+
+  const { error: profileUpdateError } = await supabase.from('profiles').update(profileUpdates).eq('id', userId)
+
+  if (profileUpdateError) {
+    logger.error('Failed to set residential role during registration', {
+      userId,
+      error: profileUpdateError.message,
+    })
+    await supabase.auth.admin.deleteUser(userId)
+    throw AppError.internal('Failed to complete registration — please try again', profileUpdateError)
+  }
+
+  const tokens = await issueTokenPair(userId, email, 'residential', null, null, null, context)
+
+  return {
+    ...tokens,
+    user: {
+      id:          userId,
+      email,
+      role:        'residential' as const,
+      companyRole: null,
+      adminRole:   null,
+      permissions: [] as string[],
+      fullName:    dto.fullName,
+      avatarUrl:   null,
+      accountId:   null,
     },
   }
 }

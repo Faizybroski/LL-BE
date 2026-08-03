@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
+import { requireRole } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createTrackingEventSchema,
@@ -19,9 +20,11 @@ trackingRouter.get(
 )
 
 // ── Collection (create) ────────────────────────────────────────────────────────
+// Residential customers only ever read tracking events for their own load.
 trackingRouter.post(
   '/',
   authMiddleware,
+  requireRole('admin', 'shipper'),
   validate(createTrackingEventSchema),
   trackingController.create,
 )
@@ -32,8 +35,9 @@ trackingRouter.get('/:id', authMiddleware, trackingController.getOne)
 trackingRouter.patch(
   '/:id',
   authMiddleware,
+  requireRole('admin', 'shipper'),
   validate(updateTrackingEventSchema),
   trackingController.update,
 )
 
-trackingRouter.delete('/:id', authMiddleware, trackingController.remove)
+trackingRouter.delete('/:id', authMiddleware, requireRole('admin', 'shipper'), trackingController.remove)

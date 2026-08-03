@@ -49,6 +49,7 @@ export async function getDashboardStats(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ): Promise<DashboardStats> {
   // Date boundaries
   const today       = new Date()
@@ -65,7 +66,10 @@ export async function getDashboardStats(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let q: any = supabase.from('shipments').select(columns, opts).is('deleted_at', null)
     if (!isAdmin) {
-      if (companyRole === 'employee' && userId) {
+      if (isResidential && userId) {
+        // Residential customer: only shipments linked directly to them
+        q = q.eq('customer_id', userId)
+      } else if (companyRole === 'employee' && userId) {
         // Employee: only their assigned loads
         q = q.eq('assigned_employee_id', userId)
       } else if (accountId && userId) {
@@ -111,7 +115,7 @@ export async function getDashboardStats(
         .gt('balance_due', 0) as any)
     : Promise.resolve({ count: 0 })
 
-  const recentTrackingPromise = trackingService.getRecentEvents(isAdmin, accountId, userId, companyRole, 5)
+  const recentTrackingPromise = trackingService.getRecentEvents(isAdmin, accountId, userId, companyRole, 5, isResidential)
     .catch(() => [] as unknown[])
 
   const [statusResults, trendResult, shippersResult, pendingResult, invoicesDueResult, recentTracking] = await Promise.all([

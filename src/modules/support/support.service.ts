@@ -69,12 +69,15 @@ export async function listCases(
   callerRole: string,
   callerId: string,
 ) {
-  const createdBy = callerRole === 'shipper' ? callerId : undefined
+  // Non-admins (shippers, residential customers) only ever see cases they
+  // personally raised. Admin manages system-wide and may additionally filter
+  // to a specific user's cases (e.g. a residential customer's detail page).
+  const createdBy = callerRole !== 'admin' ? callerId : query.userId
   const { data, count, error } = await repo.findAll(query, createdBy)
   if (error) throw AppError.internal('Failed to fetch support cases', error)
 
   // Admin manages cases system-wide — surface who raised each one so cases
-  // aren't indistinguishable in the table. Shippers only ever see their own
+  // aren't indistinguishable in the table. Non-admins only ever see their own
   // cases, so the requester is redundant for them.
   const cases = callerRole === 'admin'
     ? await resolveAuthors(data ?? [], 'created_by')

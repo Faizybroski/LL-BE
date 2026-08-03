@@ -13,6 +13,7 @@ import type {
 } from './shipments.schema'
 
 const isAdmin = (req: Request) => req.user!.role === 'admin'
+const isResidential = (req: Request) => req.user!.role === 'residential'
 
 export async function list(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -23,6 +24,7 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       req.user!.accountId,
       req.user!.id,
       req.user!.companyRole,
+      isResidential(req),
     )
     paginated(res, shipments, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {
@@ -38,6 +40,7 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
       req.user!.accountId,
       req.user!.id,
       req.user!.companyRole,
+      isResidential(req),
     )
     ok(res, shipment)
   } catch (err) {

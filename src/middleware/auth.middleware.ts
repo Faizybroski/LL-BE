@@ -5,7 +5,7 @@ import { AppError } from '../lib/errors'
 // ── Role types ────────────────────────────────────────────────────────────────
 // Defined here so every module that imports AuthenticatedRequest gets it
 // from one canonical location.
-export type UserRole    = 'admin' | 'shipper'
+export type UserRole    = 'admin' | 'shipper' | 'residential'
 export type CompanyRole = 'company_admin' | 'employee' | null
 export type AdminRole   = 'ceo' | 'vp' | 'manager' | 'assistant' | null
 

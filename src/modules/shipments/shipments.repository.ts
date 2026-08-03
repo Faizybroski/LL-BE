@@ -10,6 +10,7 @@ const LIST_SELECT = `
   shipment_type,
   status,
   account_id,
+  customer_id,
   assigned_employee_id,
   origin_address,
   origin_city,
@@ -41,7 +42,8 @@ const LIST_SELECT = `
   updated_at,
   accounts ( account_id, account_name, account_code, logo_url ),
   profiles!created_by ( id, full_name, role, avatar_url ),
-  employee:profiles!assigned_employee_id ( id, full_name, avatar_url )
+  employee:profiles!assigned_employee_id ( id, full_name, avatar_url ),
+  customer:profiles!customer_id ( id, full_name, avatar_url )
 `
 
 // DETAIL_SELECT: full projection for single-record fetch.
@@ -51,6 +53,7 @@ const DETAIL_SELECT = `
   shipment_type,
   status,
   account_id,
+  customer_id,
   assigned_employee_id,
   origin_address,
   origin_city,
@@ -83,7 +86,8 @@ const DETAIL_SELECT = `
   updated_at,
   accounts ( account_id, account_name, account_code, logo_url, contact_name, contact_email ),
   profiles!created_by ( id, full_name, role, avatar_url ),
-  employee:profiles!assigned_employee_id ( id, full_name, avatar_url )
+  employee:profiles!assigned_employee_id ( id, full_name, avatar_url ),
+  customer:profiles!customer_id ( id, full_name, avatar_url )
 `
 
 // ── Shipments ─────────────────────────────────────────────────────────────────
@@ -102,6 +106,7 @@ export async function findAll(
   isAdmin      = false,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ) {
   const offset = (query.page - 1) * query.limit
 
@@ -117,7 +122,10 @@ export async function findAll(
 
   // ── RBAC scoping ──────────────────────────────────────────────────────────
   if (!isAdmin) {
-    if (companyRole === 'employee' && userId) {
+    if (isResidential && userId) {
+      // Residential customers see only shipments linked directly to them
+      q = q.eq('customer_id', userId)
+    } else if (companyRole === 'employee' && userId) {
       // Employees see only shipments assigned to them
       q = q.eq('assigned_employee_id', userId)
     } else {
@@ -132,6 +140,8 @@ export async function findAll(
     }
   } else if (isAdmin && query.accountId) {
     q = q.eq('account_id', query.accountId)
+  } else if (isAdmin && query.customerId) {
+    q = q.eq('customer_id', query.customerId)
   }
 
   // ── Filters ───────────────────────────────────────────────────────────────

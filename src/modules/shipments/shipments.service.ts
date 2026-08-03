@@ -1,6 +1,7 @@
 import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import { logger } from '../../lib/logger'
+import type { UserRole } from '../../middleware/auth.middleware'
 import * as shipmentsRepo from './shipments.repository'
 import * as notificationsService from '../notifications/notifications.service'
 import {
@@ -73,6 +74,7 @@ async function requireShipmentAccess(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ): Promise<ShipmentRow> {
   const { data, error } = await shipmentsRepo.findById(id)
   if (error || !data) throw AppError.notFound('Shipment')
@@ -80,7 +82,12 @@ async function requireShipmentAccess(
   const shipment = cast<ShipmentRow>(data)
 
   if (!isAdmin) {
-    if (companyRole === 'employee') {
+    if (isResidential) {
+      // Residential customers can only access shipments linked directly to them
+      if (shipment.customer_id !== userId) {
+        throw AppError.forbidden('You do not have access to this shipment')
+      }
+    } else if (companyRole === 'employee') {
       // Employees can only access shipments assigned directly to them
       if (shipment.assigned_employee_id !== userId) {
         throw AppError.forbidden('You do not have access to this shipment')
@@ -105,8 +112,9 @@ export async function listShipments(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ) {
-  const { data, count, error } = await shipmentsRepo.findAll(query, accountId, isAdmin, userId, companyRole)
+  const { data, count, error } = await shipmentsRepo.findAll(query, accountId, isAdmin, userId, companyRole, isResidential)
   if (error) throw AppError.internal('Failed to fetch shipments', error)
   return { shipments: data ?? [], total: count ?? 0 }
 }
@@ -118,8 +126,9 @@ export async function getShipment(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ) {
-  const shipment = await requireShipmentAccess(id, isAdmin, accountId, userId, companyRole)
+  const shipment = await requireShipmentAccess(id, isAdmin, accountId, userId, companyRole, isResidential)
   const { data: history } = await shipmentsRepo.findStatusHistory(id)
   return { ...shipment, statusHistory: history ?? [] }
 }
@@ -128,9 +137,10 @@ export async function getShipment(
 export async function createShipment(
   dto:         CreateShipmentDto,
   createdBy:   string,
-  creatorRole: 'admin' | 'shipper',
+  creatorRole: UserRole,
 ) {
   let resolvedAccountId: string | null = null
+  let resolvedCustomerId: string | null = null
 
   if (creatorRole === 'shipper') {
     // Shipping company creates load → auto-assign to their account
@@ -141,6 +151,17 @@ export async function createShipment(
       .single()
     if (profileErr || !profile) throw AppError.internal('Failed to resolve your company account', profileErr)
     resolvedAccountId = profile.account_id ?? null
+  } else if (dto.customerId) {
+    if (dto.accountId) throw AppError.badRequest('A shipment cannot be linked to both a shipping company and a residential customer')
+    // Admin links this delivery directly to a residential customer
+    const { data: customer, error: customerErr } = await supabase
+      .from('profiles')
+      .select('id, role')
+      .eq('id', dto.customerId)
+      .single()
+    if (customerErr || !customer) throw AppError.notFound('Residential customer')
+    if (customer.role !== 'residential') throw AppError.unprocessable('Target profile is not a residential customer')
+    resolvedCustomerId = customer.id
   } else if (dto.accountId) {
     // Admin pre-assigns to a shipping company
     const { data: account, error: accountErr } = await supabase
@@ -156,6 +177,7 @@ export async function createShipment(
   const { data, error } = await shipmentsRepo.create({
     shipment_type:    dto.shipmentType,
     account_id:       resolvedAccountId,
+    customer_id:      resolvedCustomerId,
     created_by_role:  creatorRole,
 
     origin_address:  dto.originAddress,

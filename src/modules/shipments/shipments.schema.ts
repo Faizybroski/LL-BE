@@ -36,6 +36,8 @@ export const createShipmentSchema = z.object({
   shipmentType: z.enum(['freight', 'last_mile']).default('freight'),
   /** UUID of the shipping company (accounts.account_id) to pre-assign this load to. */
   accountId:    z.string().uuid('Invalid account ID').optional(),
+  /** UUID of the residential customer (profiles.id) this delivery belongs to. Mutually exclusive with accountId. */
+  customerId:   z.string().uuid('Invalid customer ID').optional(),
 
   originAddress:  z.string().min(5),
   originCity:     z.string().min(1),
@@ -102,6 +104,7 @@ export const listShipmentsSchema = z.object({
   statuses:      z.string().max(500).optional(), // comma-separated status list, takes precedence over status
   shipmentType:  z.enum(['freight', 'last_mile']).optional(),
   accountId:     z.string().uuid().optional(),
+  customerId:    z.string().uuid().optional(),
   search:        z.string().max(100).optional(),
   createdByRole: z.enum(['admin', 'shipper']).optional(),
   dateFrom:      z.string().max(30).optional(),

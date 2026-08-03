@@ -22,6 +22,15 @@ export async function updateMe(req: Request, res: Response, next: NextFunction):
   }
 }
 
+export async function getById(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const profile = await usersService.getProfile(param(req, 'id'))
+    ok(res, profile)
+  } catch (err) {
+    next(err)
+  }
+}
+
 export async function listUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { page, limit } = parsePagination(req.query)

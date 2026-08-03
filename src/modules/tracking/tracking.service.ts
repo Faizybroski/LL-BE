@@ -41,10 +41,11 @@ async function requireLoadAccess(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ): Promise<Row> {
   const { data, error } = await supabase
     .from('shipments')
-    .select('shipment_id, account_id, assigned_employee_id, created_by')
+    .select('shipment_id, account_id, customer_id, assigned_employee_id, created_by')
     .eq('shipment_id', loadId)
     .is('deleted_at', null)
     .single()
@@ -53,7 +54,11 @@ async function requireLoadAccess(
   const load = cast<Row>(data)
 
   if (!isAdmin) {
-    if (companyRole === 'employee') {
+    if (isResidential) {
+      if (load.customer_id !== userId) {
+        throw AppError.forbidden('You do not have access to this load')
+      }
+    } else if (companyRole === 'employee') {
       if (load.assigned_employee_id !== userId) {
         throw AppError.forbidden('You do not have access to this load')
       }
@@ -86,8 +91,9 @@ export async function listEvents(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ) {
-  await requireLoadAccess(loadId, isAdmin, accountId, userId, companyRole)
+  await requireLoadAccess(loadId, isAdmin, accountId, userId, companyRole, isResidential)
   const { data, count, error } = await trackingRepo.findByLoad(loadId, query)
   if (error) throw AppError.internal('Failed to fetch tracking events', error)
   return { events: data ?? [], total: count ?? 0 }
@@ -100,8 +106,9 @@ export async function getRecentEvents(
   userId?:      string,
   companyRole?: string | null,
   limit         = 10,
+  isResidential = false,
 ) {
-  const { data, error } = await trackingRepo.findRecent(isAdmin, accountId, userId, companyRole, limit)
+  const { data, error } = await trackingRepo.findRecent(isAdmin, accountId, userId, companyRole, limit, isResidential)
   if (error) throw AppError.internal('Failed to fetch recent tracking events', error)
   return data ?? []
 }
@@ -113,11 +120,12 @@ export async function getEvent(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  isResidential = false,
 ) {
   const { data, error } = await trackingRepo.findById(id)
   if (error || !data) throw AppError.notFound('Tracking event')
   const event = cast<Row>(data)
-  await requireLoadAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
+  await requireLoadAccess(event.load_id as string, isAdmin, accountId, userId, companyRole, isResidential)
   return event
 }
 

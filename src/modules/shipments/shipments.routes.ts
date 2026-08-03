@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireAdmin, requireCompanyAdmin, requirePermission, requirePermissionIfAdmin } from '../../middleware/role.middleware'
+import { requireAdmin, requireCompanyAdmin, requirePermission, requirePermissionIfAdmin, requireRole } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createShipmentSchema,
@@ -59,9 +59,11 @@ shipmentsRouter.delete(
 )
 
 // ── Status ────────────────────────────────────────────────────────────────────
+// Residential customers may view but never mutate shipment status.
 shipmentsRouter.patch(
   '/:id/status',
   authMiddleware,
+  requireRole('admin', 'shipper'),
   validate(updateShipmentStatusSchema),
   shipmentsController.updateStatus,
 )

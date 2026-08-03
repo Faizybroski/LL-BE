@@ -27,6 +27,9 @@ export const listCasesQuerySchema = z.object({
   limit:  z.coerce.number().int().min(1).max(100).default(20),
   status: z.enum(SUPPORT_CASE_STATUSES).optional(),
   search: z.string().max(200).optional(),
+  // Admin-only: view all cases raised by a specific user (e.g. a residential
+  // customer's detail page). Ignored for non-admin callers.
+  userId: z.string().uuid().optional(),
 })
 
 export const attachmentUploadUrlSchema = z.object({

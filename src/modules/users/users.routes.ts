@@ -29,6 +29,13 @@ usersRouter.get(
   usersController.listUsers,
 )
 
+usersRouter.get(
+  '/:id',
+  authMiddleware,
+  requireRole('admin'),
+  usersController.getById,
+)
+
 usersRouter.patch(
   '/:id/role',
   authMiddleware,

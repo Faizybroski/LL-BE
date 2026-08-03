@@ -9,6 +9,7 @@ import type {
 } from './tracking.schema'
 
 const isAdmin = (req: Request) => req.user!.role === 'admin'
+const isResidential = (req: Request) => req.user!.role === 'residential'
 
 export async function listByLoad(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -21,6 +22,7 @@ export async function listByLoad(req: Request, res: Response, next: NextFunction
       req.user!.accountId,
       req.user!.id,
       req.user!.companyRole,
+      isResidential(req),
     )
     paginated(res, events, {
       page:       query.page  ?? 1,
@@ -41,6 +43,7 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
       req.user!.accountId,
       req.user!.id,
       req.user!.companyRole,
+      isResidential(req),
     )
     ok(res, event)
   } catch (err) {

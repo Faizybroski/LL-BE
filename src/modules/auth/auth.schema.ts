@@ -25,17 +25,25 @@ export const logoutSchema = z.object({
 })
 
 // ── POST /auth/register ────────────────────────────────────────────────────────
-export const registerSchema = z.object({
-  email: z.string().email('Invalid email address').toLowerCase(),
-  password: z
-    .string()
-    .min(8, 'Password must be at least 8 characters')
-    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
-    .regex(/[0-9]/, 'Password must contain at least one number'),
-  fullName: z.string().min(2, 'Full name must be at least 2 characters').max(100),
-  company: z.string().min(2, 'Company name is required').max(200),
-  phone: z.string().min(7).max(30).optional(),
-})
+export const registerSchema = z
+  .object({
+    email: z.string().email('Invalid email address').toLowerCase(),
+    password: z
+      .string()
+      .min(8, 'Password must be at least 8 characters')
+      .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+      .regex(/[0-9]/, 'Password must contain at least one number'),
+    fullName: z.string().min(2, 'Full name must be at least 2 characters').max(100),
+    // 'corporate' = shipping company (creates an accounts row, role='shipper');
+    // 'residential' = individual customer (no accounts row, role='residential').
+    accountType: z.enum(['corporate', 'residential']).default('corporate'),
+    company: z.string().min(2, 'Company name is required').max(200).optional(),
+    phone: z.string().min(7).max(30).optional(),
+  })
+  .refine((data) => data.accountType !== 'corporate' || !!data.company, {
+    message: 'Company name is required',
+    path: ['company'],
+  })
 
 // ── POST /auth/change-password ─────────────────────────────────────────────────
 export const changePasswordSchema = z
