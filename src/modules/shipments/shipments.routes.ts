@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireAdmin, requireCompanyAdmin, requirePermission, requirePermissionIfAdmin, requireRole } from '../../middleware/role.middleware'
+import { requireAdmin, requirePermission, requirePermissionIfAdmin, requireRole } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createShipmentSchema,
@@ -38,8 +38,8 @@ shipmentsRouter.post(
 // ── Single resource ───────────────────────────────────────────────────────────
 shipmentsRouter.get('/:id', authMiddleware, requirePermissionIfAdmin('deliveries.view'), shipmentsController.getOne)
 
-// Full delivery edits are admin-only — shipping companies use the
-// status/assign-employee endpoints below instead.
+// Full delivery edits are admin-only — corporate customers use the
+// status endpoint below instead.
 shipmentsRouter.patch(
   '/:id',
   authMiddleware,
@@ -79,12 +79,13 @@ shipmentsRouter.post(
   shipmentsController.assign,
 )
 
-// ── Assign to Employee (company admin only) ───────────────────────────────────
-// Company admin assigns (or unassigns) a load to an employee within their company.
+// ── Assign to Driver (platform admin only) ────────────────────────────────────
+// Admin assigns (or unassigns) a delivery to one of Logical Links' own drivers.
 shipmentsRouter.post(
-  '/:id/assign-employee',
+  '/:id/assign-driver',
   authMiddleware,
-  requireCompanyAdmin,
+  requireAdmin,
+  requirePermission('deliveries.assign'),
   validate(assignEmployeeSchema),
-  shipmentsController.assignEmployee,
+  shipmentsController.assignDriver,
 )

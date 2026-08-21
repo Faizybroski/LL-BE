@@ -34,6 +34,14 @@ export const DELETABLE_STATUSES: ShipmentStatus[] = ['pending', 'confirmed']
 
 export const createShipmentSchema = z.object({
   shipmentType: z.enum(['freight', 'last_mile']).default('freight'),
+  /** Specific last-mile service (courier/medical/grocery/etc) when shipmentType is 'last_mile'. Plain string — extensible without a migration. */
+  serviceType:  z.string().min(1).max(50).optional(),
+  /** e.g. Standard/Express/Same-Day/Priority — distinct from serviceType. */
+  serviceLevel: z.string().min(1).max(50).optional(),
+  /** Pallet/Box/Crate/Envelope/Other — plain string, extensible without a migration. */
+  packageType:  z.string().min(1).max(50).optional(),
+  /** The customer's requested delivery date — distinct from estimatedDeliveryDate (the ops estimate). */
+  preferredDeliveryDate: z.string().datetime({ offset: true }).optional(),
   /** UUID of the shipping company (accounts.account_id) to pre-assign this load to. */
   accountId:    z.string().uuid('Invalid account ID').optional(),
   /** UUID of the residential customer (profiles.id) this delivery belongs to. Mutually exclusive with accountId. */
@@ -65,7 +73,7 @@ export const createShipmentSchema = z.object({
   currency:    z.string().length(3).default('CAD'),
 
   specialInstructions: z.string().optional(),
-  referenceNumber:     z.string().optional(),
+  // Confirmation number is auto-generated (LLC-#### via DB trigger) — not accepted on create.
 })
 
 export const updateShipmentSchema = createShipmentSchema
@@ -74,6 +82,8 @@ export const updateShipmentSchema = createShipmentSchema
     confirmedPrice:     z.number().min(0).optional(),
     actualPickupDate:   z.string().datetime({ offset: true }).optional(),
     actualDeliveryDate: z.string().datetime({ offset: true }).optional(),
+    // Confirmation number can be corrected post-creation.
+    referenceNumber:    z.string().optional(),
   })
   .partial()
 

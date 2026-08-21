@@ -7,7 +7,10 @@ import { AppError } from '../lib/errors'
 // from one canonical location.
 export type UserRole    = 'admin' | 'shipper' | 'residential'
 export type CompanyRole = 'company_admin' | 'employee' | null
-export type AdminRole   = 'ceo' | 'vp' | 'manager' | 'assistant' | null
+// Admin roles are DB-driven (admin_roles table) — CEO/VP/Manager/Assistant/Driver
+// ship as seeded system rows, but the CEO can add arbitrary custom roles from the
+// Roles & Permissions page, so this can't be a fixed string-literal union.
+export type AdminRole   = string | null
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 // Previous implementation: supabase.auth.getUser(token) — 1 network call per request.

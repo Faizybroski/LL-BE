@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireAdmin } from '../../middleware/role.middleware'
+import { requireAdmin, requirePermission, requirePermissionIfAdmin } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createLocationSchema,
@@ -27,10 +27,12 @@ locationsRouter.get(
 
 locationsRouter.get('/:id', authMiddleware, locationsController.getOne)
 
-// Admin-only mutations
+// Shared with shippers (inline creation from the load/tracking form) — enforce
+// the permission only for admin staff, leave shipper self-service untouched.
 locationsRouter.post(
   '/',
   authMiddleware,
+  requirePermissionIfAdmin('locations.create'),
   validate(createLocationSchema),
   locationsController.create,
 )
@@ -39,6 +41,7 @@ locationsRouter.patch(
   '/:id',
   authMiddleware,
   requireAdmin,
+  requirePermission('locations.edit'),
   validate(updateLocationSchema),
   locationsController.update,
 )
@@ -47,5 +50,6 @@ locationsRouter.delete(
   '/:id',
   authMiddleware,
   requireAdmin,
+  requirePermission('locations.delete'),
   locationsController.remove,
 )

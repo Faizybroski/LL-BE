@@ -50,16 +50,15 @@ function itemsToRows(invoiceId: string, items: CreateInvoiceDto['items']) {
   }))
 }
 
+// Corporate customers have no employees of their own — one login per account.
 export async function listInvoices(
   query: ListInvoicesQuery,
   callerRole: string,
   callerId: string,
   callerAccountId?: string | null,
-  companyRole?: string | null,
 ) {
   const accountId  = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
-  const employeeId = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
-  const { data, count, error } = await repo.findAll(query, accountId, employeeId)
+  const { data, count, error } = await repo.findAll(query, accountId)
   if (error) throw AppError.internal('Failed to fetch invoices', error)
   return { invoices: data ?? [], total: count ?? 0 }
 }
@@ -68,8 +67,6 @@ export async function getInvoice(
   id: string,
   callerRole: string,
   callerAccountId?: string | null,
-  callerId?: string,
-  companyRole?: string | null,
 ) {
   const { data, error } = await repo.findById(id)
   if (error || !data) throw AppError.notFound('Invoice')
@@ -77,15 +74,7 @@ export async function getInvoice(
   if (callerRole === 'shipper') {
     if (!callerAccountId) throw AppError.forbidden()
 
-    if (companyRole === 'employee' && callerId) {
-      if (!data.load_id || !(await repo.loadBelongsToEmployee(data.load_id, callerId))) {
-        throw AppError.forbidden()
-      }
-    } else if (companyRole === 'company_admin') {
-      if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
-        throw AppError.forbidden()
-      }
-    } else {
+    if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }
   }
@@ -152,8 +141,6 @@ export async function updateInvoice(
   id: string,
   dto: UpdateInvoiceDto,
   callerRole: string,
-  callerId?: string,
-  companyRole?: string | null,
   callerAccountId?: string | null,
 ) {
   const { data: existing } = await repo.findById(id)
@@ -164,15 +151,7 @@ export async function updateInvoice(
   }
 
   if (callerRole === 'shipper') {
-    if (companyRole === 'employee' && callerId) {
-      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
-        throw AppError.forbidden()
-      }
-    } else if (companyRole === 'company_admin' && callerAccountId) {
-      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
-        throw AppError.forbidden()
-      }
-    } else {
+    if (!callerAccountId || !(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }
   }
@@ -233,8 +212,6 @@ export async function updateInvoice(
 export async function deleteInvoice(
   id: string,
   callerRole: string,
-  callerId?: string,
-  companyRole?: string | null,
   callerAccountId?: string | null,
 ) {
   const { data: existing } = await repo.findById(id)
@@ -245,15 +222,7 @@ export async function deleteInvoice(
   }
 
   if (callerRole === 'shipper') {
-    if (companyRole === 'employee' && callerId) {
-      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
-        throw AppError.forbidden()
-      }
-    } else if (companyRole === 'company_admin' && callerAccountId) {
-      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
-        throw AppError.forbidden()
-      }
-    } else {
+    if (!callerAccountId || !(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }
   }
@@ -347,12 +316,10 @@ export async function generatePdf(
   id: string,
   callerRole: string,
   callerAccountId?: string | null,
-  callerId?: string,
-  companyRole?: string | null,
 ) {
   // Reuses getInvoice's ownership check — draft-status gating doesn't apply
   // here (PDFs are downloadable at any status), only tenant ownership does.
-  const data = await getInvoice(id, callerRole, callerAccountId, callerId, companyRole)
+  const data = await getInvoice(id, callerRole, callerAccountId)
 
   const pdfUrl = await generateAndUploadInvoicePdf(data)
   await repo.updatePdfUrl(id, pdfUrl)

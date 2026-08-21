@@ -15,6 +15,7 @@ export const NOTIFICATION_TYPES = [
   'invoice_issued',
   'invoice_paid',
   'invoice_overdue',
+  'quotation_requested',
   'quotation_sent',
   'quotation_accepted',
   'quotation_rejected',
@@ -53,7 +54,7 @@ export const NOTIFICATION_CATEGORIES = {
     'tracking_event_deleted',
   ],
   invoices: ['invoice_issued', 'invoice_paid', 'invoice_overdue'],
-  quotes: ['quotation_sent', 'quotation_accepted', 'quotation_rejected'],
+  quotes: ['quotation_requested', 'quotation_sent', 'quotation_accepted', 'quotation_rejected'],
   support: ['support_case_replied', 'support_case_status_changed'],
   account: [
     'system',

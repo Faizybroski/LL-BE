@@ -2,7 +2,14 @@ import { Request, Response, NextFunction } from 'express'
 import * as service from './quotations.service'
 import { ok, created, noContent, paginated, parsePagination } from '../../lib/response'
 import { param } from '../../lib/params'
-import type { CreateQuotationDto, UpdateQuotationDto, ListQuotationsQuery, AcceptQuotationDto } from './quotations.schema'
+import type {
+  CreateQuotationDto,
+  UpdateQuotationDto,
+  ListQuotationsQuery,
+  AcceptQuotationDto,
+  ResidentialQuoteRequestDto,
+  CorporateQuoteRequestDto,
+} from './quotations.schema'
 
 // IP + User-Agent for the acceptance audit trail — mirrors auth.controller's requestContext.
 function requestContext(req: Request) {
@@ -18,7 +25,6 @@ export async function stats(req: Request, res: Response, next: NextFunction): Pr
       req.user!.role,
       req.user!.id,
       req.user!.accountId,
-      req.user!.companyRole,
     )
     ok(res, result)
   } catch (err) {
@@ -34,7 +40,6 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       req.user!.role,
       req.user!.id,
       req.user!.accountId,
-      req.user!.companyRole,
     )
     paginated(res, quotations, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {
@@ -49,7 +54,6 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
       req.user!.role,
       req.user!.accountId,
       req.user!.id,
-      req.user!.companyRole,
     )
     ok(res, quotation)
   } catch (err) {
@@ -61,6 +65,32 @@ export async function create(req: Request, res: Response, next: NextFunction): P
   try {
     const quotation = await service.createQuotation(req.body as CreateQuotationDto, req.user!.id)
     created(res, quotation, 'Quotation created')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function createResidentialQuote(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const quotation = await service.createResidentialQuote(
+      req.user!.id,
+      req.user!.email,
+      req.body as ResidentialQuoteRequestDto,
+    )
+    created(res, quotation, 'Quote generated')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function createCorporateQuoteRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const quotation = await service.createCorporateQuoteRequest(
+      req.user!.id,
+      req.user!.accountId as string,
+      req.body as CorporateQuoteRequestDto,
+    )
+    created(res, quotation, 'Quote request submitted')
   } catch (err) {
     next(err)
   }
@@ -113,7 +143,6 @@ export async function generatePdf(req: Request, res: Response, next: NextFunctio
       req.user!.role,
       req.user!.accountId,
       req.user!.id,
-      req.user!.companyRole,
     )
     ok(res, result, 'PDF generated')
   } catch (err) {
@@ -148,6 +177,15 @@ export async function decline(req: Request, res: Response, next: NextFunction): 
       req.user!.accountId,
     )
     ok(res, quotation, 'Quotation declined')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function applyRewardsCredit(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await service.applyRewardsCredit(param(req, 'id'), req.user!.id, req.user!.role)
+    ok(res, result, 'Rewards Credit applied')
   } catch (err) {
     next(err)
   }

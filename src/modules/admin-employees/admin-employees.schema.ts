@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
-const ADMIN_ROLES = ['ceo', 'vp', 'manager', 'assistant'] as const
+// Roles are DB-driven (admin_roles table) — validity is checked against the
+// table in admin-employees.service.ts, not a fixed zod enum, since the CEO
+// can add custom roles at runtime.
 
 // ── Create Employee ───────────────────────────────────────────────────────────
 export const createAdminEmployeeSchema = z.object({
@@ -12,7 +14,7 @@ export const createAdminEmployeeSchema = z.object({
     .regex(/[0-9]/, 'Password must contain at least one number'),
   fullName: z.string().min(2, 'Full name must be at least 2 characters').max(100),
   phone: z.string().min(7).max(30).optional(),
-  adminRole: z.enum(ADMIN_ROLES),
+  adminRole: z.string().min(1),
 })
 
 // ── Update Employee ───────────────────────────────────────────────────────────
@@ -20,13 +22,14 @@ export const updateAdminEmployeeSchema = z.object({
   fullName:  z.string().min(2).max(100).optional(),
   phone:     z.string().min(7).max(30).optional(),
   isActive:  z.boolean().optional(),
-  adminRole: z.enum(ADMIN_ROLES).optional(),
+  adminRole: z.string().min(1).optional(),
 })
 
 // ── List Employees ────────────────────────────────────────────────────────────
 export const listAdminEmployeesSchema = z.object({
   page:  z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
+  role:  z.string().min(1).optional(),
 })
 
 // ── Types ─────────────────────────────────────────────────────────────────────

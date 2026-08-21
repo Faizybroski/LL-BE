@@ -60,8 +60,6 @@ export async function findRecent(
   if (!isAdmin) {
     if (isResidential && userId) {
       q = (q as any).eq('shipments.customer_id', userId)
-    } else if (companyRole === 'employee' && userId) {
-      q = (q as any).eq('shipments.assigned_employee_id', userId)
     } else if (accountId) {
       q = (q as any).eq('shipments.account_id', accountId)
     }

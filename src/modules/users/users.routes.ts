@@ -21,10 +21,15 @@ usersRouter.post('/me/avatar/upload-url', authMiddleware, usersController.getAva
 usersRouter.delete('/me/avatar', authMiddleware, usersController.removeMyAvatar)
 
 // ── Admin: list and manage all users ─────────────────────────────────────────
+// This generic endpoint is what the residential-customer pages (and the
+// create-load residential customer picker) actually list from — gate it on
+// the same customers.view permission those pages already assume, rather
+// than inventing a separate key.
 usersRouter.get(
   '/',
   authMiddleware,
   requireRole('admin'),
+  requirePermission('customers.view'),
   validate(listUsersQuerySchema, 'query'),
   usersController.listUsers,
 )
@@ -33,6 +38,7 @@ usersRouter.get(
   '/:id',
   authMiddleware,
   requireRole('admin'),
+  requirePermission('customers.view'),
   usersController.getById,
 )
 
@@ -45,10 +51,13 @@ usersRouter.patch(
   usersController.updateUserRole,
 )
 
+// The corporate-customer approve/reject flow already gates this button on
+// customers.edit in the frontend — enforce the same key here.
 usersRouter.patch(
   '/:id/approve',
   authMiddleware,
   requireRole('admin'),
+  requirePermission('customers.edit'),
   validate(approveUserSchema),
   usersController.approveUser,
 )

@@ -69,9 +69,6 @@ export async function getDashboardStats(
       if (isResidential && userId) {
         // Residential customer: only shipments linked directly to them
         q = q.eq('customer_id', userId)
-      } else if (companyRole === 'employee' && userId) {
-        // Employee: only their assigned loads
-        q = q.eq('assigned_employee_id', userId)
       } else if (accountId && userId) {
         q = q.or(`account_id.eq.${accountId},created_by.eq.${userId}`)
       } else if (accountId) {

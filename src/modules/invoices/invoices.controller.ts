@@ -12,7 +12,6 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       req.user!.role,
       req.user!.id,
       req.user!.accountId,
-      req.user!.companyRole,
     )
     paginated(res, invoices, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {
@@ -26,8 +25,6 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
       param(req, 'id'),
       req.user!.role,
       req.user!.accountId,
-      req.user!.id,
-      req.user!.companyRole,
     )
     ok(res, invoice)
   } catch (err) {
@@ -50,8 +47,6 @@ export async function update(req: Request, res: Response, next: NextFunction): P
       param(req, 'id'),
       req.body as UpdateInvoiceDto,
       req.user!.role,
-      req.user!.id,
-      req.user!.companyRole,
       req.user!.accountId,
     )
     ok(res, invoice, 'Invoice updated')
@@ -65,8 +60,6 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
     await service.deleteInvoice(
       param(req, 'id'),
       req.user!.role,
-      req.user!.id,
-      req.user!.companyRole,
       req.user!.accountId,
     )
     noContent(res)
@@ -99,8 +92,6 @@ export async function generatePdf(req: Request, res: Response, next: NextFunctio
       param(req, 'id'),
       req.user!.role,
       req.user!.accountId,
-      req.user!.id,
-      req.user!.companyRole,
     )
     ok(res, result, 'PDF generated')
   } catch (err) {

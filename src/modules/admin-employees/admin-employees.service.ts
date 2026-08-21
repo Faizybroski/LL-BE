@@ -2,6 +2,7 @@ import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import { logger } from '../../lib/logger'
 import * as adminEmployeesRepo from './admin-employees.repository'
+import * as adminRolesRepo from '../admin-roles/admin-roles.repository'
 import * as notificationsService from '../notifications/notifications.service'
 import type { CreateAdminEmployeeDto, UpdateAdminEmployeeDto, ListAdminEmployeesQuery } from './admin-employees.schema'
 
@@ -16,7 +17,7 @@ interface RequestingUser {
 
 // ── List employees ────────────────────────────────────────────────────────────
 export async function listAdminEmployees(query: ListAdminEmployeesQuery) {
-  const { data, count, error } = await adminEmployeesRepo.findAdminEmployees(query.page, query.limit)
+  const { data, count, error } = await adminEmployeesRepo.findAdminEmployees(query.page, query.limit, query.role)
   if (error) throw AppError.internal('Failed to fetch employees', error)
 
   const profiles = data ?? []
@@ -53,6 +54,9 @@ export async function createAdminEmployee(requestingUser: RequestingUser, dto: C
   if (dto.adminRole === 'ceo' && !requestingUser.permissions.includes('employees.manage_roles')) {
     throw AppError.forbidden('Creating a CEO-level account requires the "employees.manage_roles" permission')
   }
+
+  const { data: role } = await adminRolesRepo.findRoleBySlug(dto.adminRole)
+  if (!role) throw AppError.badRequest(`Unknown role "${dto.adminRole}"`)
 
   const { data, error } = await supabase.auth.admin.createUser({
     email:          dto.email,
@@ -130,6 +134,8 @@ export async function updateAdminEmployee(requestingUser: RequestingUser, id: st
     if (!requestingUser.permissions.includes('employees.manage_roles')) {
       throw AppError.forbidden('This action requires the "employees.manage_roles" permission')
     }
+    const { data: role } = await adminRolesRepo.findRoleBySlug(dto.adminRole)
+    if (!role) throw AppError.badRequest(`Unknown role "${dto.adminRole}"`)
     if (existing.admin_role === 'ceo' && dto.adminRole !== 'ceo') {
       const { count } = await adminEmployeesRepo.countActiveCeosExcluding(id)
       if (!count || count < 1) {

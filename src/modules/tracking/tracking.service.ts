@@ -58,11 +58,8 @@ async function requireLoadAccess(
       if (load.customer_id !== userId) {
         throw AppError.forbidden('You do not have access to this load')
       }
-    } else if (companyRole === 'employee') {
-      if (load.assigned_employee_id !== userId) {
-        throw AppError.forbidden('You do not have access to this load')
-      }
     } else {
+      // Corporate customers have no employees of their own — one login per account.
       const matchesAccount = accountId && load.account_id === accountId
       const isCreator      = userId    && load.created_by  === userId
       if (!matchesAccount && !isCreator) {
@@ -74,13 +71,8 @@ async function requireLoadAccess(
 }
 
 // Determine the "created_by_role" string to store for the event.
-function resolveEventRole(
-  isAdmin:     boolean,
-  companyRole: string | null | undefined,
-): string {
-  if (isAdmin) return 'admin'
-  if (companyRole === 'employee') return 'employee'
-  return 'company_admin'
+function resolveEventRole(isAdmin: boolean): string {
+  return isAdmin ? 'admin' : 'company_admin'
 }
 
 // ── List events for a load ────────────────────────────────────────────────────
@@ -145,7 +137,7 @@ export async function createEvent(
     tracking_status: dto.trackingStatus,
     notes:           dto.notes ?? null,
     created_by:      userId,
-    created_by_role: resolveEventRole(isAdmin, companyRole),
+    created_by_role: resolveEventRole(isAdmin),
     event_timestamp: dto.eventTimestamp ?? new Date().toISOString(),
   })
 

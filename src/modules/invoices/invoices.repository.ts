@@ -35,28 +35,12 @@ function applyInvoiceFilters(q: any, query: ListInvoicesQuery): any {
   return q
 }
 
-export async function findAll(query: ListInvoicesQuery, accountId?: string, employeeId?: string) {
+// Corporate customers have no employees of their own — one login per account,
+// so the only non-admin scope is by account.
+export async function findAll(query: ListInvoicesQuery, accountId?: string) {
   const sortField = query.sortBy ?? 'created_at'
   const ascending = query.sortDir === 'asc'
   const range     = [(query.page - 1) * query.limit, query.page * query.limit - 1] as const
-
-  // Employee scope: only invoices linked to loads assigned to them
-  if (employeeId) {
-    const { data: loads } = await supabase
-      .from('shipments').select('shipment_id').eq('assigned_employee_id', employeeId)
-    const loadIds = (loads ?? []).map((l: { shipment_id: string }) => l.shipment_id)
-    if (loadIds.length === 0) return { data: [], count: 0, error: null }
-
-    const eq: any = supabase
-      .from(TABLE)
-      .select(INVOICE_SELECT, { count: 'exact' })
-      .is('deleted_at', null)
-      .order(sortField, { ascending })
-      .range(...range)
-      .in('load_id', loadIds)
-
-    return applyInvoiceFilters(eq, query)
-  }
 
   let q: any = supabase
     .from(TABLE)

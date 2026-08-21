@@ -13,13 +13,15 @@ const PROFILE_SELECT = `
   updated_at
 `
 
-export async function findAdminEmployees(page: number, limit: number) {
+export async function findAdminEmployees(page: number, limit: number, role?: string) {
   const offset = (page - 1) * limit
-  return supabase
+  let query = supabase
     .from('profiles')
     .select(PROFILE_SELECT, { count: 'exact' })
     .eq('role', 'admin')
     .is('deleted_at', null)
+  if (role) query = query.eq('admin_role', role)
+  return query
     .range(offset, offset + limit - 1)
     .order('created_at', { ascending: false })
 }

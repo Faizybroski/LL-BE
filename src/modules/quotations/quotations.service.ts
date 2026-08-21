@@ -2,8 +2,20 @@ import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import * as repo from './quotations.repository'
 import * as notificationsService from '../notifications/notifications.service'
+import * as rewardsCreditService from '../rewards-credit/rewards-credit.service'
+import * as pricingService from '../pricing/pricing.service'
+import * as shipmentsService from '../shipments/shipments.service'
 import { generateAndUploadQuotationPdf } from '../../services/pdf.service'
-import type { CreateQuotationDto, UpdateQuotationDto, ListQuotationsQuery, AcceptQuotationDto } from './quotations.schema'
+import type { UserRole } from '../../middleware/auth.middleware'
+import type { CreateShipmentDto } from '../shipments/shipments.schema'
+import type {
+  CreateQuotationDto,
+  UpdateQuotationDto,
+  ListQuotationsQuery,
+  AcceptQuotationDto,
+  ResidentialQuoteRequestDto,
+  CorporateQuoteRequestDto,
+} from './quotations.schema'
 
 // Fire-and-forget — notifications must never block the main operation.
 function notifyUser(
@@ -25,18 +37,23 @@ function computeTotals(items: { quantity: number; unit_price: number }[], discou
   return { subtotal: Math.round(subtotal * 100) / 100, tax, total }
 }
 
+// Corporate customers (role='shipper') have no employees of their own — one
+// login per account — so the only non-admin, non-residential scope is by account.
 export async function listQuotations(
   query: ListQuotationsQuery,
   callerRole: string,
   callerId: string,
   callerAccountId?: string | null,
-  companyRole?: string | null,
 ) {
   const accountId    = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
-  const employeeId   = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
+  // Residential customers only ever see their own quotations (profile_id match) —
+  // without this they fell through with no scope at all and could list every
+  // company's quotations system-wide (see [[customer_types]] "grep every module
+  // for callerRole === 'shipper'" lesson — this module had the exact gap).
+  const profileId     = callerRole === 'residential' ? callerId : undefined
   // Customers never see internal drafts — only quotations that have been issued to them.
-  const excludeDraft = callerRole === 'shipper'
-  const { data, count, error } = await repo.findAll(query, accountId, employeeId, excludeDraft)
+  const excludeDraft = callerRole === 'shipper' || callerRole === 'residential'
+  const { data, count, error } = await repo.findAll(query, accountId, undefined, excludeDraft, profileId)
   if (error) throw AppError.internal('Failed to fetch quotations', error)
   return { quotations: data ?? [], total: count ?? 0 }
 }
@@ -45,12 +62,11 @@ export async function getQuotationStats(
   callerRole: string,
   callerId: string,
   callerAccountId?: string | null,
-  companyRole?: string | null,
 ) {
   const accountId    = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
-  const employeeId   = callerRole === 'shipper' && companyRole === 'employee' ? callerId : undefined
-  const excludeDraft = callerRole === 'shipper'
-  return repo.getStats(accountId, employeeId, excludeDraft)
+  const profileId     = callerRole === 'residential' ? callerId : undefined
+  const excludeDraft = callerRole === 'shipper' || callerRole === 'residential'
+  return repo.getStats(accountId, undefined, excludeDraft, profileId)
 }
 
 export async function getQuotation(
@@ -58,30 +74,31 @@ export async function getQuotation(
   callerRole: string,
   callerAccountId?: string | null,
   callerId?: string,
-  companyRole?: string | null,
 ) {
   const { data, error } = await repo.findById(id)
   if (error || !data) throw AppError.notFound('Quotation')
 
-  if (callerRole === 'shipper') {
+  if (callerRole === 'residential') {
+    // Customers never see internal drafts — treat as not found, same as any other doc they can't access.
+    if (data.status === 'draft' || data.profile_id !== callerId) throw AppError.notFound('Quotation')
+  } else if (callerRole === 'shipper') {
     if (!callerAccountId) throw AppError.forbidden()
     // Customers never see internal drafts — treat as not found, same as any other doc they can't access.
     if (data.status === 'draft') throw AppError.notFound('Quotation')
 
-    if (companyRole === 'employee' && callerId) {
-      if (!data.load_id || !(await repo.loadBelongsToEmployee(data.load_id, callerId))) {
-        throw AppError.forbidden()
-      }
-    } else if (companyRole === 'company_admin') {
-      if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
-        throw AppError.forbidden()
-      }
-    } else {
+    if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }
   }
 
   return data
+}
+
+// Quotations auto-expire 10 days after issue unless the admin sets a different date.
+function defaultExpiryDate(issueDate: string): string {
+  const d = new Date(`${issueDate}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 10)
+  return d.toISOString().slice(0, 10)
 }
 
 export async function createQuotation(dto: CreateQuotationDto, createdBy: string) {
@@ -94,7 +111,7 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
     created_by:       createdBy,
     status:           dto.status,
     issue_date:       dto.issueDate,
-    expiry_date:      dto.expiryDate ?? null,
+    expiry_date:      dto.expiryDate ?? defaultExpiryDate(dto.issueDate),
     customer_name:    dto.customerName,
     customer_company: dto.customerCompany ?? null,
     customer_email:   dto.customerEmail ?? null,
@@ -115,6 +132,18 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
     destination_lat:     dto.destinationLat ?? null,
     destination_lng:     dto.destinationLng ?? null,
     distance_km:         dto.distanceKm ?? null,
+    origin_city:            dto.originCity ?? null,
+    origin_state:           dto.originState ?? null,
+    origin_postcode:        dto.originPostcode ?? null,
+    destination_city:       dto.destinationCity ?? null,
+    destination_state:      dto.destinationState ?? null,
+    destination_postcode:   dto.destinationPostcode ?? null,
+    cargo_description:      dto.cargoDescription ?? null,
+    service_type:           dto.serviceType ?? null,
+    service_level:           dto.serviceLevel ?? null,
+    weight_kg:               dto.weightKg ?? null,
+    pieces:                  dto.pieces ?? null,
+    preferred_delivery_date: dto.preferredDeliveryDate ?? null,
   })
 
   if (error || !quotation) throw AppError.internal('Failed to create quotation', error)
@@ -149,6 +178,144 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
 
   const { data: full } = await repo.findById(quotation.id)
   return full
+}
+
+// ── POST /quotations/residential-quote ──────────────────────────────────────────
+// Residential self-service: price it instantly from the pricing library and
+// hand back an already-`sent` quotation the customer can accept right away.
+export async function createResidentialQuote(callerId: string, callerEmail: string, dto: ResidentialQuoteRequestDto) {
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('full_name, phone')
+    .eq('id', callerId)
+    .maybeSingle()
+
+  const breakdown = await pricingService.calculateDeliveryPrice({
+    serviceType:          dto.serviceType,
+    serviceLevel:         dto.serviceLevel,
+    distanceKm:           dto.distanceKm,
+    weightKg:             dto.weightKg,
+    additionalChargeKeys: dto.additionalChargeKeys,
+  })
+
+  const items = [
+    {
+      description: `${breakdown.label} Delivery (${breakdown.serviceLevelLabel})`,
+      category:    'freight_charge' as const,
+      quantity:    1,
+      unit:        'delivery',
+      unit_price:  breakdown.deliveryCharge,
+      sort_order:  0,
+    },
+    ...(breakdown.weightCharge > 0 ? [{
+      description: `Weight Surcharge (${breakdown.weightKg} kg × $${breakdown.weightPerKgRate.toFixed(2)}/kg)`,
+      category:    'accessorial' as const,
+      quantity:    1,
+      unit:        'charge',
+      unit_price:  breakdown.weightCharge,
+      sort_order:  1,
+    }] : []),
+    ...breakdown.additionalCharges.map((c, idx) => ({
+      description: c.label,
+      category:    'accessorial' as const,
+      quantity:    1,
+      unit:        'charge',
+      unit_price:  c.amount,
+      sort_order:  idx + 2,
+    })),
+  ]
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  return createQuotation(
+    {
+      profileId:    callerId,
+      status:       'sent',
+      issueDate:    today,
+      customerName:    dto.customerName || (profile?.full_name as string | null) || 'Residential Customer',
+      customerEmail:   dto.customerEmail || callerEmail,
+      customerPhone:   dto.customerPhone || (profile?.phone as string | null) || null,
+      currency:     'CAD',
+      originAddress:        dto.originAddress,
+      originLat:            dto.originLat,
+      originLng:            dto.originLng,
+      originCity:           dto.originCity,
+      originState:          dto.originState,
+      originPostcode:       dto.originPostcode,
+      destinationAddress:   dto.destinationAddress,
+      destinationLat:       dto.destinationLat,
+      destinationLng:       dto.destinationLng,
+      destinationCity:      dto.destinationCity,
+      destinationState:     dto.destinationState,
+      destinationPostcode:  dto.destinationPostcode,
+      distanceKm:           dto.distanceKm,
+      cargoDescription:     dto.cargoDescription,
+      serviceType:          dto.serviceType,
+      serviceLevel:         dto.serviceLevel,
+      weightKg:             dto.weightKg,
+      pieces:               dto.pieces,
+      preferredDeliveryDate: dto.preferredDeliveryDate,
+      notes:                dto.notes ?? null,
+      items,
+    } as CreateQuotationDto,
+    callerId,
+  )
+}
+
+// ── POST /quotations/request ──────────────────────────────────────────────────
+// Corporate self-service: submit a request with no price — an admin prices
+// it afterward via the existing PATCH /:id + line items flow.
+export async function createCorporateQuoteRequest(callerId: string, callerAccountId: string, dto: CorporateQuoteRequestDto) {
+  const [{ data: profile }, { data: account }] = await Promise.all([
+    supabase.from('profiles').select('full_name, phone').eq('id', callerId).maybeSingle(),
+    supabase.from('accounts').select('account_name').eq('account_id', callerAccountId).maybeSingle(),
+  ])
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  const created = await createQuotation(
+    {
+      profileId:    callerId,
+      status:       'requested',
+      issueDate:    today,
+      customerName:    dto.customerName || (profile?.full_name as string | null) || 'Shipping Company Contact',
+      customerCompany: dto.customerCompany || (account?.account_name as string | null) || null,
+      customerEmail:   dto.customerEmail,
+      customerPhone:   dto.customerPhone || (profile?.phone as string | null) || null,
+      currency:     'CAD',
+      originAddress:        dto.originAddress,
+      originLat:            dto.originLat,
+      originLng:            dto.originLng,
+      originCity:           dto.originCity,
+      originState:          dto.originState,
+      originPostcode:       dto.originPostcode,
+      destinationAddress:   dto.destinationAddress,
+      destinationLat:       dto.destinationLat,
+      destinationLng:       dto.destinationLng,
+      destinationCity:      dto.destinationCity,
+      destinationState:     dto.destinationState,
+      destinationPostcode:  dto.destinationPostcode,
+      cargoDescription:     dto.cargoDescription,
+      serviceType:          dto.serviceType,
+      serviceLevel:         dto.serviceLevel,
+      weightKg:             dto.weightKg,
+      pieces:               dto.pieces,
+      preferredDeliveryDate: dto.preferredDeliveryDate,
+      notes:        dto.notes ?? null,
+    } as CreateQuotationDto,
+    callerId,
+  )
+
+  const companyName = (account?.account_name as string | null) ?? 'A shipping company'
+  void notificationsService.notifyAllAdmins(
+    'quotation_requested',
+    'New quote request',
+    `${companyName} requested a quote for a new delivery.`,
+    'quotation',
+    (created as { id: string }).id,
+  )
+
+  return created
 }
 
 export async function updateQuotation(
@@ -217,6 +384,18 @@ export async function updateQuotation(
   if (dto.destinationLat     !== undefined) patch.destination_lat     = dto.destinationLat
   if (dto.destinationLng     !== undefined) patch.destination_lng     = dto.destinationLng
   if (dto.distanceKm         !== undefined) patch.distance_km         = dto.distanceKm
+  if (dto.originCity          !== undefined) patch.origin_city          = dto.originCity
+  if (dto.originState         !== undefined) patch.origin_state         = dto.originState
+  if (dto.originPostcode      !== undefined) patch.origin_postcode      = dto.originPostcode
+  if (dto.destinationCity     !== undefined) patch.destination_city     = dto.destinationCity
+  if (dto.destinationState    !== undefined) patch.destination_state    = dto.destinationState
+  if (dto.destinationPostcode !== undefined) patch.destination_postcode = dto.destinationPostcode
+  if (dto.cargoDescription    !== undefined) patch.cargo_description    = dto.cargoDescription
+  if (dto.serviceType         !== undefined) patch.service_type         = dto.serviceType
+  if (dto.serviceLevel        !== undefined) patch.service_level        = dto.serviceLevel
+  if (dto.weightKg            !== undefined) patch.weight_kg            = dto.weightKg
+  if (dto.pieces              !== undefined) patch.pieces               = dto.pieces
+  if (dto.preferredDeliveryDate !== undefined) patch.preferred_delivery_date = dto.preferredDeliveryDate
   patch.subtotal = subtotal
   patch.discount = discount
   patch.tax_rate = taxRate
@@ -257,9 +436,17 @@ export async function updateQuotation(
 async function assertCustomerCanActOn(
   quotation: { load_id: string | null; profile_id: string },
   callerId: string,
+  callerRole: string,
   companyRole: string | null | undefined,
   callerAccountId: string | null | undefined,
 ): Promise<void> {
+  // Residential customers have no companyRole/account — a quotation belongs to
+  // them directly via profile_id, same as it belongs to a shipper via account.
+  if (callerRole === 'residential') {
+    if (quotation.profile_id !== callerId) throw AppError.forbidden()
+    return
+  }
+
   if (companyRole === 'employee') {
     if (!quotation.load_id || !(await repo.loadBelongsToEmployee(quotation.load_id, callerId))) {
       throw AppError.forbidden()
@@ -283,6 +470,60 @@ async function acceptanceIdentity(userId: string, accountId: string | null | und
   return { fullName: (profile?.full_name as string | null) ?? null, companyName }
 }
 
+// Creates the matching shipment the moment a quotation is accepted (both
+// residential and corporate). Fails closed with a clear error rather than
+// silently leaving an accepted quotation with no delivery — quotations from
+// before this feature (or admin-authored ones missing structured address
+// fields) won't have everything this needs.
+const SHIPMENT_REQUIRED_FIELDS = [
+  'origin_address', 'origin_city', 'origin_state', 'origin_postcode',
+  'destination_address', 'destination_city', 'destination_state', 'destination_postcode',
+  'cargo_description',
+] as const
+
+async function createShipmentFromAcceptedQuotation(
+  quotation: Record<string, unknown>,
+  quotationId: string,
+  callerId: string,
+  callerRole: UserRole,
+): Promise<void> {
+  const missing = SHIPMENT_REQUIRED_FIELDS.filter((key) => !quotation[key])
+  if (missing.length > 0) {
+    throw AppError.unprocessable(
+      'This quotation is missing delivery details required to create a shipment — contact support',
+    )
+  }
+
+  const dto: CreateShipmentDto = {
+    shipmentType:  quotation.service_type ? 'last_mile' : 'freight',
+    serviceType:   (quotation.service_type as string | null) ?? undefined,
+    serviceLevel:  (quotation.service_level as string | null) ?? undefined,
+    preferredDeliveryDate: (quotation.preferred_delivery_date as string | null) ?? undefined,
+    originAddress:        quotation.origin_address as string,
+    originCity:           quotation.origin_city as string,
+    originState:          quotation.origin_state as string,
+    originPostcode:       quotation.origin_postcode as string,
+    originCountry:        'Australia',
+    destinationAddress:   quotation.destination_address as string,
+    destinationCity:      quotation.destination_city as string,
+    destinationState:     quotation.destination_state as string,
+    destinationPostcode:  quotation.destination_postcode as string,
+    destinationCountry:   'Australia',
+    cargoDescription:     quotation.cargo_description as string,
+    weightKg:             (quotation.weight_kg as number | null) ?? undefined,
+    pieces:               (quotation.pieces as number | null) ?? undefined,
+    specialInstructions:  (quotation.notes as string | null) ?? undefined,
+    isDangerousGoods:      false,
+    requiresRefrigeration: false,
+    quotedPrice: Number(quotation.total) || undefined,
+    currency:    (quotation.currency as string | null) ?? 'CAD',
+    ...(callerRole === 'residential' ? { customerId: callerId } : {}),
+  }
+
+  const shipment = await shipmentsService.createShipment(dto, callerId, callerRole)
+  await repo.update(quotationId, { load_id: (shipment as { shipment_id: string }).shipment_id })
+}
+
 // ── POST /:id/accept ──────────────────────────────────────────────────────────
 export async function acceptQuotation(
   id: string,
@@ -293,12 +534,12 @@ export async function acceptQuotation(
   callerAccountId: string | null | undefined,
   context: { ipAddress?: string; userAgent?: string },
 ) {
-  if (callerRole !== 'shipper') throw AppError.forbidden('Only customers can accept quotations')
+  if (callerRole !== 'shipper' && callerRole !== 'residential') throw AppError.forbidden('Only customers can accept quotations')
 
   const { data: existing } = await repo.findById(id)
   if (!existing || existing.status === 'draft') throw AppError.notFound('Quotation')
 
-  await assertCustomerCanActOn(existing, callerId, companyRole, callerAccountId)
+  await assertCustomerCanActOn(existing, callerId, callerRole, companyRole, callerAccountId)
 
   if (existing.status === 'accepted') throw AppError.conflict('Quotation has already been accepted')
   if (existing.status === 'rejected') throw AppError.conflict('Quotation has already been declined')
@@ -345,6 +586,8 @@ export async function acceptQuotation(
     id,
   )
 
+  await createShipmentFromAcceptedQuotation(existing, id, callerId, callerRole as UserRole)
+
   const { data: full } = await repo.findById(id)
   return full
 }
@@ -357,12 +600,12 @@ export async function declineQuotation(
   companyRole: string | null | undefined,
   callerAccountId: string | null | undefined,
 ) {
-  if (callerRole !== 'shipper') throw AppError.forbidden('Only customers can decline quotations')
+  if (callerRole !== 'shipper' && callerRole !== 'residential') throw AppError.forbidden('Only customers can decline quotations')
 
   const { data: existing } = await repo.findById(id)
   if (!existing || existing.status === 'draft') throw AppError.notFound('Quotation')
 
-  await assertCustomerCanActOn(existing, callerId, companyRole, callerAccountId)
+  await assertCustomerCanActOn(existing, callerId, callerRole, companyRole, callerAccountId)
 
   if (existing.status === 'accepted') throw AppError.conflict('Quotation has already been accepted')
   if (existing.status === 'rejected') throw AppError.conflict('Quotation has already been declined')
@@ -462,15 +705,49 @@ export async function duplicateQuotation(id: string, createdBy: string) {
   return createQuotation(dto, createdBy)
 }
 
+// ── POST /:id/apply-rewards-credit ────────────────────────────────────────────
+// Residential-only. Applies min(balance, max_redemption% × total) as a credit
+// against this quotation, recorded on both the ledger and the quotation row.
+export async function applyRewardsCredit(id: string, callerId: string, callerRole: string) {
+  const { data: quotation } = await repo.findById(id)
+  if (!quotation) throw AppError.notFound('Quotation')
+
+  if (callerRole !== 'residential' || quotation.profile_id !== callerId) {
+    throw AppError.forbidden('Only the residential customer this quotation belongs to can apply Rewards Credit')
+  }
+
+  if (quotation.status !== 'sent') {
+    throw AppError.unprocessable('Rewards Credit can only be applied to a quotation awaiting review')
+  }
+
+  if (quotation.rewards_credit_applied && Number(quotation.rewards_credit_applied) > 0) {
+    throw AppError.conflict('Rewards Credit has already been applied to this quotation')
+  }
+
+  const { applied, newBalance } = await rewardsCreditService.redeemCreditForQuotation(
+    callerId,
+    id,
+    Number(quotation.total),
+  )
+
+  if (applied === 0) {
+    return { quotation, applied, remainingBalance: newBalance }
+  }
+
+  const { data: updated, error } = await repo.update(id, { rewards_credit_applied: applied })
+  if (error) throw AppError.internal('Failed to record Rewards Credit on quotation', error)
+
+  return { quotation: updated, applied, remainingBalance: newBalance }
+}
+
 export async function generatePdf(
   id: string,
   callerRole: string,
   callerAccountId?: string | null,
   callerId?: string,
-  companyRole?: string | null,
 ) {
   // Reuses getQuotation's ownership check (also hides drafts from shippers).
-  const data = await getQuotation(id, callerRole, callerAccountId, callerId, companyRole)
+  const data = await getQuotation(id, callerRole, callerAccountId, callerId)
 
   const pdfUrl = await generateAndUploadQuotationPdf(data)
   await repo.updatePdfUrl(id, pdfUrl)
