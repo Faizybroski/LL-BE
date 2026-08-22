@@ -23,7 +23,7 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRES_DAYS: z.coerce.number().int().min(1).max(90).default(7),
 
   // ── Security ─────────────────────────────────────────────────────────────────
-  // Number of trusted reverse proxy hops (Nginx, load balancer).
+  // Number of trusted reverse proxy hops (Nginx, delivery balancer).
   // Set to 1 when running behind a single reverse proxy so rate limiting
   // sees the real client IP from X-Forwarded-For, not the proxy IP.
   // Set to 0 in local development (no proxy in front).

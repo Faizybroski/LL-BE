@@ -15,7 +15,7 @@ import * as ctrl from './support.controller'
 
 export const supportRouter = Router()
 
-// requirePermissionIfAdmin no-ops for shipper/residential case owners — only
+// requirePermissionIfAdmin no-ops for corporate/residential case owners — only
 // admin staff without the matching permission get blocked.
 supportRouter.get('/',    authMiddleware, requirePermissionIfAdmin('support.view'), validate(listCasesQuerySchema, 'query'), ctrl.list)
 supportRouter.post('/',   authMiddleware, requirePermissionIfAdmin('support.create'), validate(createCaseSchema), ctrl.create)

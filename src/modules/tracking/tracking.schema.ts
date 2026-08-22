@@ -37,7 +37,7 @@ export const TRACKING_STATUS_LABELS: Record<TrackingStatus, string> = {
 }
 
 export const createTrackingEventSchema = z.object({
-  loadId:          z.string().uuid('Invalid load ID'),
+  loadId:          z.string().uuid('Invalid delivery ID'),
   locationId:      z.string().uuid('Invalid location ID').optional(),
   trackingStatus:  z.enum(TRACKING_STATUSES),
   notes:           z.string().max(1000).optional(),

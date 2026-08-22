@@ -457,7 +457,7 @@ export async function register(
     return registerResidential(userId, data.user!.email!, dto, context)
   }
 
-  // Create an account (company) for the new shipper
+  // Create an account (company) for the new corporate
   const { data: account, error: accountError } = await supabase
     .from('accounts')
     .insert({ account_name: dto.company, created_by: userId })
@@ -531,7 +531,7 @@ export async function register(
   const tokens = await issueTokenPair(
     userId,
     data.user!.email!,
-    'shipper',
+    'corporate',
     account.account_id,
     'company_admin',
     null,
@@ -543,7 +543,7 @@ export async function register(
     user: {
       id:          userId,
       email:       data.user!.email!,
-      role:        'shipper' as const,
+      role:        'corporate' as const,
       companyRole: 'company_admin' as const,
       adminRole:   null,
       permissions: [] as string[],
@@ -555,8 +555,8 @@ export async function register(
 }
 
 // Residential customers have no shipping company — no accounts row, no
-// company_role. Admins later link shipments to them directly via
-// shipments.customer_id.
+// company_role. Admins later link deliveries to them directly via
+// deliveries.customer_id.
 async function registerResidential(
   userId: string,
   email: string,

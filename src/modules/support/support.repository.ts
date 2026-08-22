@@ -29,7 +29,7 @@ export async function findAll(query: ListCasesQuery, createdBy?: string) {
     .order('updated_at', { ascending: false })
     .range((query.page - 1) * query.limit, query.page * query.limit - 1)
 
-  // Shippers only ever see cases they personally raised — not company-wide.
+  // Corporates only ever see cases they personally raised — not company-wide.
   if (createdBy) q = q.eq('created_by', createdBy)
   if (query.status) q = q.eq('status', query.status)
   if (query.search) {

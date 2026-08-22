@@ -7,7 +7,7 @@ import * as tiersController from './tiers.controller'
 
 export const tiersRouter = Router()
 
-// Public — used by the marketing /tiers page as well as the shipper dashboard.
+// Public — used by the marketing /tiers page as well as the corporate dashboard.
 tiersRouter.get('/', tiersController.list)
 
 tiersRouter.patch(

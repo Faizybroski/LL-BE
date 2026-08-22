@@ -6,7 +6,7 @@ const ITEMS = 'invoice_items'
 
 const INVOICE_SELECT = `
   *,
-  profiles ( id, full_name, avatar_url ),
+  profiles ( id, full_name, avatar_url, role ),
   shipments (
     shipment_id, load_number, origin_city, destination_city,
     account_id, assigned_employee_id,
@@ -49,13 +49,13 @@ export async function findAll(query: ListInvoicesQuery, accountId?: string) {
     .order(sortField, { ascending })
     .range(...range)
 
-  // Company admin scope: invoices linked to company-owned loads OR unlinked docs created by company members
+  // Company admin scope: invoices linked to company-owned deliveries OR unlinked docs created by company members
   if (accountId) {
-    const [{ data: loads }, { data: profiles }] = await Promise.all([
+    const [{ data: deliveries }, { data: profiles }] = await Promise.all([
       supabase.from('shipments').select('shipment_id').eq('account_id', accountId),
       supabase.from('profiles').select('id').eq('account_id', accountId),
     ])
-    const loadIds    = (loads    ?? []).map((l: { shipment_id: string }) => l.shipment_id)
+    const loadIds    = (deliveries    ?? []).map((l: { shipment_id: string }) => l.shipment_id)
     const profileIds = (profiles ?? []).map((p: { id: string })         => p.id)
 
     if (loadIds.length === 0 && profileIds.length === 0) return { data: [], count: 0, error: null }

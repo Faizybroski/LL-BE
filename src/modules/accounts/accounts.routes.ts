@@ -16,7 +16,7 @@ import * as accountsController from './accounts.controller'
 
 export const accountsRouter = Router()
 
-// ── Shipper: own profile ──────────────────────────────────────────────────────
+// ── Corporate: own profile ──────────────────────────────────────────────────────
 // Mounted before /:id so the literal "me" path is not captured as an ID param.
 accountsRouter.get(
   '/me',

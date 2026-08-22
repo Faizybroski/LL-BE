@@ -15,7 +15,7 @@ import type {
 
 // ── Context helper ────────────────────────────────────────────────────────────
 // Extracts IP + User-Agent for session metadata.
-// IP resolution: respect X-Forwarded-For only if you trust your proxy/load
+// IP resolution: respect X-Forwarded-For only if you trust your proxy/delivery
 // balancer. In production, set trust proxy in Express: app.set('trust proxy', 1)
 function requestContext(req: Request) {
   return {

@@ -57,7 +57,7 @@ export async function listInvoices(
   callerId: string,
   callerAccountId?: string | null,
 ) {
-  const accountId  = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
+  const accountId  = callerRole === 'corporate' ? (callerAccountId ?? undefined) : undefined
   const { data, count, error } = await repo.findAll(query, accountId)
   if (error) throw AppError.internal('Failed to fetch invoices', error)
   return { invoices: data ?? [], total: count ?? 0 }
@@ -71,7 +71,7 @@ export async function getInvoice(
   const { data, error } = await repo.findById(id)
   if (error || !data) throw AppError.notFound('Invoice')
 
-  if (callerRole === 'shipper') {
+  if (callerRole === 'corporate') {
     if (!callerAccountId) throw AppError.forbidden()
 
     if (!(await repo.documentBelongsToCompany(data.load_id, data.profile_id, callerAccountId))) {
@@ -127,7 +127,7 @@ export async function createInvoice(dto: CreateInvoiceDto, createdBy: string) {
     void notificationsService.notifyAllAdmins(
       'invoice_issued',
       'Invoice issued',
-      `Invoice ${invoiceNumber} was issued to a shipper.`,
+      `Invoice ${invoiceNumber} was issued to a corporate.`,
       'invoice',
       invoice.id,
     )
@@ -146,11 +146,11 @@ export async function updateInvoice(
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Invoice')
 
-  if (callerRole === 'shipper' && existing.status !== 'draft') {
+  if (callerRole === 'corporate' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft invoices can be edited')
   }
 
-  if (callerRole === 'shipper') {
+  if (callerRole === 'corporate') {
     if (!callerAccountId || !(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }
@@ -217,11 +217,11 @@ export async function deleteInvoice(
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Invoice')
 
-  if (callerRole === 'shipper' && existing.status !== 'draft') {
+  if (callerRole === 'corporate' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft invoices can be deleted')
   }
 
-  if (callerRole === 'shipper') {
+  if (callerRole === 'corporate') {
     if (!callerAccountId || !(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }

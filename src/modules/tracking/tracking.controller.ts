@@ -11,7 +11,7 @@ import type {
 const isAdmin = (req: Request) => req.user!.role === 'admin'
 const isResidential = (req: Request) => req.user!.role === 'residential'
 
-export async function listByLoad(req: Request, res: Response, next: NextFunction): Promise<void> {
+export async function listByDelivery(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const loadId = param(req, 'loadId')
     const query  = req.query as unknown as ListTrackingEventsQuery

@@ -18,7 +18,7 @@ statusesRouter.get('/search',  authMiddleware, statusesController.search)
 statusesRouter.get('/:id',     authMiddleware, statusesController.getOne)
 
 // Any authenticated user can create a custom status (inline from dropdown) —
-// enforce the permission only for admin staff, shippers stay unaffected.
+// enforce the permission only for admin staff, corporates stay unaffected.
 statusesRouter.post('/', authMiddleware, requirePermissionIfAdmin('statuses.create'), validate(createStatusSchema), statusesController.create)
 
 // Admin-only: edit / soft-delete custom statuses

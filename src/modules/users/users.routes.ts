@@ -22,7 +22,7 @@ usersRouter.delete('/me/avatar', authMiddleware, usersController.removeMyAvatar)
 
 // ── Admin: list and manage all users ─────────────────────────────────────────
 // This generic endpoint is what the residential-customer pages (and the
-// create-load residential customer picker) actually list from — gate it on
+// create-delivery residential customer picker) actually list from — gate it on
 // the same customers.view permission those pages already assume, rather
 // than inventing a separate key.
 usersRouter.get(

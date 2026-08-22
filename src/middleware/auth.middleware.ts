@@ -5,7 +5,7 @@ import { AppError } from '../lib/errors'
 // ── Role types ────────────────────────────────────────────────────────────────
 // Defined here so every module that imports AuthenticatedRequest gets it
 // from one canonical location.
-export type UserRole    = 'admin' | 'shipper' | 'residential'
+export type UserRole    = 'admin' | 'corporate' | 'residential'
 export type CompanyRole = 'company_admin' | 'employee' | null
 // Admin roles are DB-driven (admin_roles table) — CEO/VP/Manager/Assistant/Driver
 // ship as seeded system rows, but the CEO can add arbitrary custom roles from the

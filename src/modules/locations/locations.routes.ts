@@ -27,8 +27,8 @@ locationsRouter.get(
 
 locationsRouter.get('/:id', authMiddleware, locationsController.getOne)
 
-// Shared with shippers (inline creation from the load/tracking form) — enforce
-// the permission only for admin staff, leave shipper self-service untouched.
+// Shared with corporates (inline creation from the delivery/tracking form) — enforce
+// the permission only for admin staff, leave corporate self-service untouched.
 locationsRouter.post(
   '/',
   authMiddleware,

@@ -191,7 +191,7 @@ export async function createAccountNote(
 
   if (error || !data) throw AppError.internal('Failed to create note', error)
 
-  void notificationsService.notifyAllAdmins('account_note_created', 'Account note added', 'A note was added to a shipper account.', 'account', accountId)
+  void notificationsService.notifyAllAdmins('account_note_created', 'Account note added', 'A note was added to a corporate account.', 'account', accountId)
   if (!dto.isInternal) {
     const companyAdminId = await findCompanyAdminId(accountId)
     if (companyAdminId) {
@@ -214,7 +214,7 @@ export async function updateAccountNote(
   const { data, error } = await accountsRepo.updateNoteById(noteId, dto.content, updatedBy)
   if (error || !data) throw AppError.internal('Failed to update note', error)
 
-  void notificationsService.notifyAllAdmins('account_note_updated', 'Account note updated', 'A note on a shipper account was updated.', 'account', accountId)
+  void notificationsService.notifyAllAdmins('account_note_updated', 'Account note updated', 'A note on a corporate account was updated.', 'account', accountId)
   if (!existing.is_internal) {
     const companyAdminId = await findCompanyAdminId(accountId)
     if (companyAdminId) {
@@ -233,7 +233,7 @@ export async function deleteAccountNote(accountId: string, noteId: string) {
   if (error) throw AppError.internal('Failed to delete note', error)
 }
 
-// ── Shipper: own account (company) ───────────────────────────────────────────
+// ── Corporate: own account (company) ───────────────────────────────────────────
 export async function getOwnProfile(userId: string) {
   const { data, error } = await accountsRepo.findAccountByUserId(userId)
   if (error || !data) throw AppError.notFound('Account')
@@ -250,8 +250,8 @@ export async function updateOwnProfile(userId: string, dto: UpdateOwnProfileDto)
 
   void notificationsService.notifyAllAdmins(
     'account_updated',
-    'Shipper profile updated',
-    `${(data.full_name as string | null) ?? 'A shipper'} updated their profile.`,
+    'Corporate profile updated',
+    `${(data.full_name as string | null) ?? 'A corporate'} updated their profile.`,
     'account',
     userId,
   )
@@ -285,7 +285,7 @@ export async function updateOwnCompany(userId: string, dto: UpdateOwnCompanyDto)
 
   void notificationsService.notifyAllAdmins(
     'account_updated',
-    'Shipper company profile updated',
+    'Corporate company profile updated',
     `Company "${data.account_name as string}" updated their own company profile.`,
     'account',
     accountId,

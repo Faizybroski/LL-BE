@@ -5,7 +5,7 @@ import type { UserRole } from './auth.middleware'
 
 // ── requireRole ───────────────────────────────────────────────────────────────
 // Usage:  router.get('/admin-only', authMiddleware, requireRole('admin'), handler)
-//         router.get('/either',     authMiddleware, requireRole('admin', 'shipper'), handler)
+//         router.get('/either',     authMiddleware, requireRole('admin', 'corporate'), handler)
 //
 // This runs AFTER authMiddleware, so req.user is guaranteed to be populated.
 // The role comes from the JWT payload — no DB call needed.
@@ -33,13 +33,13 @@ export function requireRole(...allowedRoles: UserRole[]) {
 export const requireAdmin = requireRole('admin')
 
 // ── requireCompanyAdmin ───────────────────────────────────────────────────────
-// Requires the user to be a shipper with company_role = 'company_admin'.
+// Requires the user to be a corporate with company_role = 'company_admin'.
 // Used for routes that only company admins (not employees) may call.
 export function requireCompanyAdmin(req: Request, _res: Response, next: NextFunction): void {
   if (!req.user) {
     return void next(AppError.unauthorized())
   }
-  if (req.user.role !== 'shipper' || req.user.companyRole !== 'company_admin') {
+  if (req.user.role !== 'corporate' || req.user.companyRole !== 'company_admin') {
     return void next(AppError.forbidden('This action requires Company Admin role'))
   }
   next()
@@ -64,10 +64,10 @@ export function requirePermission(key: string) {
 }
 
 // ── requirePermissionIfAdmin ──────────────────────────────────────────────────
-// Like requirePermission, but only enforced for platform admins — shippers pass
+// Like requirePermission, but only enforced for platform admins — corporates pass
 // through untouched. For routes shared between both roles (e.g. GET /quotations,
-// which shippers use to view their own quotations and admins use to view all of
-// them), requirePermission would incorrectly block every shipper too.
+// which corporates use to view their own quotations and admins use to view all of
+// them), requirePermission would incorrectly block every corporate too.
 // Usage: router.get('/', authMiddleware, requirePermissionIfAdmin('quotations.view'), handler)
 export function requirePermissionIfAdmin(key: string) {
   return (req: Request, _res: Response, next: NextFunction): void => {

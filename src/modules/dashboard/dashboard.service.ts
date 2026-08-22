@@ -1,13 +1,13 @@
 import { supabase } from '../../services/supabase.service'
-import { SHIPMENT_STATUSES, type ShipmentStatus } from '../shipments/shipments.schema'
+import { DELIVERY_STATUSES, type DeliveryStatus } from '../deliveries/deliveries.schema'
 import * as trackingService from '../tracking/tracking.service'
 
-// Statuses that represent an actively-moving load (not yet terminal)
-const ACTIVE_STATUSES: ShipmentStatus[] = [
+// Statuses that represent an actively-moving delivery (not yet terminal)
+const ACTIVE_STATUSES: DeliveryStatus[] = [
   'pending', 'confirmed', 'assigned', 'picked_up', 'in_transit', 'out_for_delivery',
 ]
 
-export interface StatusCounts extends Record<ShipmentStatus, number> {}
+export interface StatusCounts extends Record<DeliveryStatus, number> {}
 
 export interface TrendPoint {
   date:  string  // YYYY-MM-DD
@@ -17,14 +17,14 @@ export interface TrendPoint {
 export interface DashboardStats {
   byStatus:             StatusCounts
   total:                number
-  activeLoads:          number
+  activeDeliveries:          number
   // 30-day sparkline data (index 0 = 30 days ago, index 29 = today)
   trend:                TrendPoint[]
   // Previous 30-day total — used by frontend to compute growth %
   prevPeriodTotal:      number
   recentTrackingEvents: unknown[]
   // Admin-only
-  totalShippers?:       number
+  totalCorporates?:       number
   pendingApprovals?:    number
   invoicesDue?:         number
 }
@@ -67,7 +67,7 @@ export async function getDashboardStats(
     let q: any = supabase.from('shipments').select(columns, opts).is('deleted_at', null)
     if (!isAdmin) {
       if (isResidential && userId) {
-        // Residential customer: only shipments linked directly to them
+        // Residential customer: only deliveries linked directly to them
         q = q.eq('customer_id', userId)
       } else if (accountId && userId) {
         q = q.or(`account_id.eq.${accountId},created_by.eq.${userId}`)
@@ -83,7 +83,7 @@ export async function getDashboardStats(
   // ── Parallel queries ──────────────────────────────────────────────────────
 
   // 1. One COUNT per status (exact, no row fetch)
-  const statusCountPromises = SHIPMENT_STATUSES.map((s) =>
+  const statusCountPromises = DELIVERY_STATUSES.map((s) =>
     buildBase('shipment_id', { count: 'exact', head: true })
       .eq('status', s) as Promise<{ count: number | null; error: unknown }>
   )
@@ -93,14 +93,14 @@ export async function getDashboardStats(
     .gte('created_at', prevStart.toISOString())
     .lte('created_at', today.toISOString()) as Promise<{ data: Array<{ created_at: string }> | null; error: unknown }>
 
-  // 3. Admin-only: active shipper accounts + pending approvals
-  const shippersPromise: Promise<{ count: number | null }> = isAdmin
+  // 3. Admin-only: active corporate accounts + pending approvals
+  const corporatesPromise: Promise<{ count: number | null }> = isAdmin
     ? (supabase.from('accounts').select('account_id', { count: 'exact', head: true }).eq('is_active', true) as any)
     : Promise.resolve({ count: 0 })
 
   const pendingPromise: Promise<{ count: number | null }> = isAdmin
     ? (supabase.from('profiles').select('id', { count: 'exact', head: true })
-        .eq('role', 'shipper')
+        .eq('role', 'corporate')
         .eq('is_approved', false) as any)
     : Promise.resolve({ count: 0 })
 
@@ -115,10 +115,10 @@ export async function getDashboardStats(
   const recentTrackingPromise = trackingService.getRecentEvents(isAdmin, accountId, userId, companyRole, 5, isResidential)
     .catch(() => [] as unknown[])
 
-  const [statusResults, trendResult, shippersResult, pendingResult, invoicesDueResult, recentTracking] = await Promise.all([
+  const [statusResults, trendResult, corporatesResult, pendingResult, invoicesDueResult, recentTracking] = await Promise.all([
     Promise.all(statusCountPromises),
     trendPromise,
-    shippersPromise,
+    corporatesPromise,
     pendingPromise,
     invoicesDuePromise,
     recentTrackingPromise,
@@ -127,12 +127,12 @@ export async function getDashboardStats(
   // ── Aggregate status counts ───────────────────────────────────────────────
 
   const byStatus = {} as StatusCounts
-  SHIPMENT_STATUSES.forEach((s, i) => {
+  DELIVERY_STATUSES.forEach((s, i) => {
     byStatus[s] = statusResults[i].count ?? 0
   })
 
   const total       = (Object.values(byStatus) as number[]).reduce((a: number, b: number) => a + b, 0)
-  const activeLoads = ACTIVE_STATUSES.reduce((sum, s) => sum + (byStatus[s] ?? 0), 0)
+  const activeDeliveries = ACTIVE_STATUSES.reduce((sum, s) => sum + (byStatus[s] ?? 0), 0)
 
   // ── Build trend + previous period ─────────────────────────────────────────
 
@@ -164,14 +164,14 @@ export async function getDashboardStats(
   const stats: DashboardStats = {
     byStatus,
     total,
-    activeLoads,
+    activeDeliveries,
     trend,
     prevPeriodTotal,
     recentTrackingEvents: recentTracking,
   }
 
   if (isAdmin) {
-    stats.totalShippers    = shippersResult.count ?? 0
+    stats.totalCorporates    = corporatesResult.count ?? 0
     stats.pendingApprovals = pendingResult.count  ?? 0
     stats.invoicesDue      = invoicesDueResult.count ?? 0
   }

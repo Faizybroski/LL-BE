@@ -35,7 +35,7 @@ export const updateAccountSchema = createAccountSchema
   .partial()
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })
 
-// ── Shipper: own company update (company_admin only, own account) ────────────
+// ── Corporate: own company update (company_admin only, own account) ────────────
 // Deliberately excludes credit_limit/payment_terms/isActive — commercial terms
 // stay admin-managed even though the company_admin can edit their own contacts.
 export const updateOwnCompanySchema = z.object({
@@ -77,7 +77,7 @@ export const updateAccountNoteSchema = z.object({
   content: z.string().min(1).max(5000),
 })
 
-// ── Shipper: own profile update ───────────────────────────────────────────────
+// ── Corporate: own profile update ───────────────────────────────────────────────
 export const updateOwnProfileSchema = z
   .object({
     fullName: z.string().min(2).optional(),

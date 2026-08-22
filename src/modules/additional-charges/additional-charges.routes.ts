@@ -7,12 +7,16 @@ import * as controller from './additional-charges.controller'
 
 export const additionalChargesRouter = Router()
 
-additionalChargesRouter.use(authMiddleware, requireAdmin, requirePermission('pricing.view'))
-
-additionalChargesRouter.get('/', controller.list)
+// Any authenticated user (admin or customer) can read the global charge
+// list — both the admin Pricing Calculator and the customer quote-request
+// forms need the same options with the same prices. Only mutating them
+// stays admin-only.
+additionalChargesRouter.get('/', authMiddleware, controller.list)
 
 additionalChargesRouter.post(
   '/',
+  authMiddleware,
+  requireAdmin,
   requirePermission('pricing.edit'),
   validate(createChargeSchema),
   controller.create,
@@ -20,6 +24,8 @@ additionalChargesRouter.post(
 
 additionalChargesRouter.patch(
   '/:id',
+  authMiddleware,
+  requireAdmin,
   requirePermission('pricing.edit'),
   validate(chargeIdSchema, 'params'),
   validate(updateChargeSchema),
@@ -28,6 +34,8 @@ additionalChargesRouter.patch(
 
 additionalChargesRouter.delete(
   '/:id',
+  authMiddleware,
+  requireAdmin,
   requirePermission('pricing.edit'),
   validate(chargeIdSchema, 'params'),
   controller.remove,

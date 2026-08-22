@@ -24,7 +24,7 @@ export async function findById(id: string) {
     .single()
 }
 
-export async function findByLoad(
+export async function findByDelivery(
   loadId:      string,
   query:       ListTrackingEventsQuery,
 ) {
@@ -47,7 +47,7 @@ export async function findRecent(
   isResidential = false,
 ) {
   // Use !inner so the embedded-resource filter excludes parent rows
-  // that have no matching shipment (dot-notation filters on a plain embed
+  // that have no matching delivery (dot-notation filters on a plain embed
   // only filter the embedded JSON, not the parent row).
   const embed = isAdmin
     ? 'shipments!load_id ( shipment_id, load_number, account_id, customer_id, assigned_employee_id )'
@@ -59,9 +59,9 @@ export async function findRecent(
 
   if (!isAdmin) {
     if (isResidential && userId) {
-      q = (q as any).eq('shipments.customer_id', userId)
+      q = (q as any).eq('deliveries.customer_id', userId)
     } else if (accountId) {
-      q = (q as any).eq('shipments.account_id', accountId)
+      q = (q as any).eq('deliveries.account_id', accountId)
     }
   }
 

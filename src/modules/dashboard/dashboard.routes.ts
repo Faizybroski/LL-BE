@@ -5,6 +5,6 @@ import * as dashboardController from './dashboard.controller'
 
 export const dashboardRouter = Router()
 
-// Shared with shippers (their own dashboard) — requirePermissionIfAdmin only
-// enforces for role === 'admin', so shippers are unaffected.
+// Shared with corporates (their own dashboard) — requirePermissionIfAdmin only
+// enforces for role === 'admin', so corporates are unaffected.
 dashboardRouter.get('/stats', authMiddleware, requirePermissionIfAdmin('reports.operational'), dashboardController.getStats)

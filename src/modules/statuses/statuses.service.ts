@@ -99,7 +99,7 @@ export async function deleteStatus(id: string) {
   if (countErr) throw AppError.internal('Failed to check status usage', countErr)
   if ((count ?? 0) > 0) {
     throw AppError.unprocessable(
-      'This status is in use by active loads. Disable it instead of deleting.',
+      'This status is in use by active deliveries. Disable it instead of deleting.',
     )
   }
 

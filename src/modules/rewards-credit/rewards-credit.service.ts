@@ -17,9 +17,9 @@ export async function getBalance(profileId: string): Promise<number> {
   return data?.balance ?? 0
 }
 
-// Called when a residential customer's shipment is marked delivered. Never
+// Called when a residential customer's delivery is marked delivered. Never
 // throws — a rewards-credit failure must not block the delivery status update.
-export async function earnCreditForDelivery(profileId: string, shipmentId: string): Promise<void> {
+export async function earnCreditForDelivery(profileId: string, deliveryId: string): Promise<void> {
   try {
     const [earnAmount, maxBalance, currentBalance] = await Promise.all([
       getRuleValue(EARN_RULE_SLUG, 1),
@@ -33,24 +33,24 @@ export async function earnCreditForDelivery(profileId: string, shipmentId: strin
 
     // Ledger insert first, guarded by a unique index on (shipment_id) where
     // type='earn' (migration 054) — a concurrent retry for the same
-    // shipment fails here, before the balance is ever touched, instead of
+    // delivery fails here, before the balance is ever touched, instead of
     // double-awarding credit.
     const { error: ledgerErr } = await rewardsCreditRepo.insertLedgerEntry({
       profile_id:  profileId,
-      shipment_id: shipmentId,
+      shipment_id: deliveryId,
       amount:      actuallyEarned,
       type:        'earn',
       note:        'Delivery completed',
     })
     if (ledgerErr) {
-      if (rewardsCreditRepo.isDuplicateLedgerEntry(ledgerErr)) return // already awarded for this shipment
+      if (rewardsCreditRepo.isDuplicateLedgerEntry(ledgerErr)) return // already awarded for this delivery
       throw ledgerErr
     }
 
     const { error: balErr } = await rewardsCreditRepo.upsertBalance(profileId, newBalance)
     if (balErr) throw balErr
   } catch (err) {
-    logger.error('Failed to award rewards credit for delivered shipment', { profileId, shipmentId, error: (err as Error).message })
+    logger.error('Failed to award rewards credit for delivered delivery', { profileId, deliveryId, error: (err as Error).message })
   }
 }
 

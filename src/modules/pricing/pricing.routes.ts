@@ -7,13 +7,14 @@ import * as pricingController from './pricing.controller'
 
 export const pricingRouter = Router()
 
-// Corporate/admin-driven pricing calculation — a pure calculation, does not
-// itself create a quotation (that's a separate explicit "Generate Quote" action).
+// Pure calculation against the global rates/charges — does not itself
+// create a quotation. Used by admin's Pricing Calculator AND by both
+// customer types' quote-request forms, so it's open to any authenticated
+// user rather than admin-only; mutating the underlying rates/charges stays
+// admin-only (see delivery-rates, additional-charges, weight-rate routes).
 pricingRouter.post(
   '/calculate',
   authMiddleware,
-  requireAdmin,
-  requirePermission('deliveries.create'),
   validate(calculatePriceSchema),
   pricingController.calculate,
 )

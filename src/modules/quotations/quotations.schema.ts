@@ -106,7 +106,7 @@ export const acceptQuotationSchema = z.object({
 // pricing engine needs is required. Corporate customers only submit a
 // request (no pricing fields) — an admin prices it afterward via the
 // existing PATCH /:id + line items flow. Both forms capture the same set of
-// contact/shipment-detail fields (Aug 22 spec); "customerCompany" is only
+// contact/delivery-detail fields (Aug 22 spec); "customerCompany" is only
 // meaningful for corporate but stays optional on both schemas.
 const quoteRequestCommonFields = {
   customerName:    z.string().min(1, 'Customer name is required').max(255),
@@ -134,14 +134,42 @@ const quoteRequestCommonFields = {
   notes:                z.string().max(5000).optional().nullable(),
 }
 
-export const residentialQuoteRequestSchema = z.object({
+// Shared by both self-service "instant quote" flows (residential — always;
+// corporate — the "same as residential" option instead of requesting a
+// manual quote). Nothing is written to the DB for the price-preview step
+// itself (that's just POST /pricing/calculate) — this shape is only used
+// once the customer decides, via the /decide endpoints below.
+const autoQuoteRequestFields = {
   ...quoteRequestCommonFields,
   distanceKm:           z.coerce.number().min(0),
   additionalChargeKeys: z.array(z.string()).default([]),
-})
+}
 
+export const residentialQuoteRequestSchema = z.object(autoQuoteRequestFields)
+
+// POST .../decide — the customer's accept/decline choice on a self-service
+// instant quote. The quotation row is only created here, directly at its
+// final status ('accepted' or 'rejected') — never passes through 'sent'.
+// termsVersion/acknowledged are required only when accepting (mirrors
+// acceptQuotationSchema's mandatory Terms & Conditions enforcement).
+export const decideAutoQuoteSchema = z.object({
+  ...autoQuoteRequestFields,
+  decision:     z.enum(['accept', 'decline']),
+  termsVersion: z.string().min(1).optional(),
+  acknowledged: z.boolean().optional(),
+}).refine(
+  (dto) => dto.decision !== 'accept' || (!!dto.termsVersion && dto.acknowledged === true),
+  { message: 'You must acknowledge the Terms & Conditions to accept', path: ['acknowledged'] },
+)
+
+// Corporate manual quote request — no pricing fields, an admin prices it
+// afterward. additionalChargeKeys is a wishlist only: nothing is priced
+// yet, just recorded so admin's Pricing Calculator can pre-tick the same
+// options the customer asked for (see requested_additional_charge_keys,
+// migration 062).
 export const corporateQuoteRequestSchema = z.object({
   ...quoteRequestCommonFields,
+  additionalChargeKeys: z.array(z.string()).default([]),
 })
 
 export type CreateQuotationDto   = z.infer<typeof createQuotationSchema>
@@ -150,4 +178,5 @@ export type ListQuotationsQuery  = z.infer<typeof listQuotationsQuerySchema>
 export type QuotationLineItemDto = z.infer<typeof lineItemSchema>
 export type AcceptQuotationDto   = z.infer<typeof acceptQuotationSchema>
 export type ResidentialQuoteRequestDto = z.infer<typeof residentialQuoteRequestSchema>
+export type DecideAutoQuoteDto         = z.infer<typeof decideAutoQuoteSchema>
 export type CorporateQuoteRequestDto   = z.infer<typeof corporateQuoteRequestSchema>

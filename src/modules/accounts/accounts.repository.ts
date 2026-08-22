@@ -192,7 +192,7 @@ export async function findProfileNamesByIds(userIds: string[]) {
     .in('id', userIds)
 }
 
-// ── Shipper profile ───────────────────────────────────────────────────────────
+// ── Corporate profile ───────────────────────────────────────────────────────────
 export async function findProfileById(userId: string) {
   return supabase
     .from('profiles')

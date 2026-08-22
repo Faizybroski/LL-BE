@@ -156,7 +156,7 @@ function customerSection(
     destination_address?: string | null
     distance_km?: number | null
   },
-  load?: { load_number: string; origin_city: string; destination_city: string } | null,
+  delivery?: { load_number: string; origin_city: string; destination_city: string } | null,
 ) {
   doc.rect(MARGIN, y, COL_W, 10).fill(LIGHT_BG)
   doc.fillColor(DARK).font('Helvetica-Bold').fontSize(8).text('BILL TO', MARGIN + 4, y + 1.5)
@@ -198,13 +198,13 @@ function customerSection(
     }
   }
 
-  if (load) {
+  if (delivery) {
     const lx = MARGIN + 280
     doc.rect(lx, y - 60, 215, 60).fill(LIGHT_BG)
-    doc.fillColor(DARK).font('Helvetica-Bold').fontSize(8).text('LOAD REFERENCE', lx + 4, y - 56)
-    doc.fillColor(DARK).font('Helvetica-Bold').fontSize(11).text(load.load_number, lx + 4, y - 44)
+    doc.fillColor(DARK).font('Helvetica-Bold').fontSize(8).text('DELIVERY REFERENCE', lx + 4, y - 56)
+    doc.fillColor(DARK).font('Helvetica-Bold').fontSize(11).text(delivery.load_number, lx + 4, y - 44)
     doc.fillColor(GREY).font('Helvetica').fontSize(9)
-      .text(`${load.origin_city} → ${load.destination_city}`, lx + 4, y - 30)
+      .text(`${delivery.origin_city} → ${delivery.destination_city}`, lx + 4, y - 30)
   }
 
   y += 16

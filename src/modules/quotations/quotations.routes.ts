@@ -7,25 +7,38 @@ import {
   updateQuotationSchema,
   listQuotationsQuerySchema,
   acceptQuotationSchema,
-  residentialQuoteRequestSchema,
+  decideAutoQuoteSchema,
   corporateQuoteRequestSchema,
 } from './quotations.schema'
 import * as ctrl from './quotations.controller'
 
 export const quotationsRouter = Router()
 
-// Mounted before "/:id" so the literal "stats"/"residential-quote"/"request"
-// paths aren't captured as an id param.
+// Mounted before "/:id" so the literal "stats"/"*-quote"/"request" paths
+// aren't captured as an id param.
 quotationsRouter.get('/stats',          authMiddleware, requirePermissionIfAdmin('quotations.view'), ctrl.stats)
 
 // ── Self-service quote request (customer workflow) ─────────────────────────────
+// Instant quote, both customer types: price preview is just POST
+// /pricing/calculate (no DB write); these create the quotation directly at
+// its decided status once the customer accepts or declines — see
+// service.decideAutoQuote.
 quotationsRouter.post(
-  '/residential-quote',
+  '/residential-quote/decide',
   authMiddleware,
   requireRole('residential'),
-  validate(residentialQuoteRequestSchema),
-  ctrl.createResidentialQuote,
+  validate(decideAutoQuoteSchema),
+  ctrl.decideAutoQuote,
 )
+quotationsRouter.post(
+  '/corporate-quote/decide',
+  authMiddleware,
+  requireCompanyAdmin,
+  validate(decideAutoQuoteSchema),
+  ctrl.decideAutoQuote,
+)
+// Corporate manual quote request — no price yet, an admin prices it
+// afterward via the existing PATCH /:id + line items flow.
 quotationsRouter.post(
   '/request',
   authMiddleware,

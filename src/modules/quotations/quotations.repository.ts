@@ -6,7 +6,7 @@ const ITEMS = 'quotation_items'
 
 const QUOTATION_SELECT = `
   *,
-  profiles ( id, full_name, avatar_url ),
+  profiles ( id, full_name, avatar_url, role ),
   shipments (
     shipment_id, load_number, origin_city, destination_city,
     account_id, assigned_employee_id,
@@ -68,11 +68,11 @@ export async function findAll(
     return applyQuotationFilters(q, query)
   }
 
-  // Employee scope: only quotations linked to loads assigned to them
+  // Employee scope: only quotations linked to deliveries assigned to them
   if (employeeId) {
-    const { data: loads } = await supabase
+    const { data: deliveries } = await supabase
       .from('shipments').select('shipment_id').eq('assigned_employee_id', employeeId)
-    const loadIds = (loads ?? []).map((l: { shipment_id: string }) => l.shipment_id)
+    const loadIds = (deliveries ?? []).map((l: { shipment_id: string }) => l.shipment_id)
     if (loadIds.length === 0) return { data: [], count: 0, error: null }
 
     let eq: any = supabase
@@ -97,13 +97,13 @@ export async function findAll(
 
   if (excludeDraft) q = q.neq('status', 'draft')
 
-  // Company admin scope: quotations linked to company-owned loads OR unlinked docs created by company members
+  // Company admin scope: quotations linked to company-owned deliveries OR unlinked docs created by company members
   if (accountId) {
-    const [{ data: loads }, { data: profiles }] = await Promise.all([
+    const [{ data: deliveries }, { data: profiles }] = await Promise.all([
       supabase.from('shipments').select('shipment_id').eq('account_id', accountId),
       supabase.from('profiles').select('id').eq('account_id', accountId),
     ])
-    const loadIds    = (loads    ?? []).map((l: { shipment_id: string }) => l.shipment_id)
+    const loadIds    = (deliveries    ?? []).map((l: { shipment_id: string }) => l.shipment_id)
     const profileIds = (profiles ?? []).map((p: { id: string })         => p.id)
 
     if (loadIds.length === 0 && profileIds.length === 0) return { data: [], count: 0, error: null }
@@ -122,26 +122,26 @@ export async function findAll(
 export async function getStats(accountId?: string, employeeId?: string, excludeDraft?: boolean, profileId?: string) {
   const today = new Date().toISOString().slice(0, 10)
 
-  // Employee scope: only quotations linked to loads assigned to them
-  let employeeLoadIds: string[] | undefined
-  // Company admin scope: quotations linked to company-owned loads OR unlinked docs created by company members
+  // Employee scope: only quotations linked to deliveries assigned to them
+  let employeeDeliveryIds: string[] | undefined
+  // Company admin scope: quotations linked to company-owned deliveries OR unlinked docs created by company members
   let accountScopeOr: string | undefined
 
   if (profileId) {
     // handled below via `scoped()`'s profileId branch
   } else if (employeeId) {
-    const { data: loads } = await supabase
+    const { data: deliveries } = await supabase
       .from('shipments').select('shipment_id').eq('assigned_employee_id', employeeId)
-    employeeLoadIds = (loads ?? []).map((l: { shipment_id: string }) => l.shipment_id)
-    if (employeeLoadIds.length === 0) {
+    employeeDeliveryIds = (deliveries ?? []).map((l: { shipment_id: string }) => l.shipment_id)
+    if (employeeDeliveryIds.length === 0) {
       return { total: 0, pendingReview: 0, accepted: 0, expired: 0 }
     }
   } else if (accountId) {
-    const [{ data: loads }, { data: profiles }] = await Promise.all([
+    const [{ data: deliveries }, { data: profiles }] = await Promise.all([
       supabase.from('shipments').select('shipment_id').eq('account_id', accountId),
       supabase.from('profiles').select('id').eq('account_id', accountId),
     ])
-    const loadIds    = (loads    ?? []).map((l: { shipment_id: string }) => l.shipment_id)
+    const loadIds    = (deliveries    ?? []).map((l: { shipment_id: string }) => l.shipment_id)
     const profileIds = (profiles ?? []).map((p: { id: string })         => p.id)
     if (loadIds.length === 0 && profileIds.length === 0) {
       return { total: 0, pendingReview: 0, accepted: 0, expired: 0 }
@@ -158,8 +158,8 @@ export async function getStats(accountId?: string, employeeId?: string, excludeD
     if (excludeDraft) q = q.neq('status', 'draft')
     if (profileId) {
       q = q.eq('profile_id', profileId)
-    } else if (employeeLoadIds) {
-      q = q.in('load_id', employeeLoadIds)
+    } else if (employeeDeliveryIds) {
+      q = q.in('load_id', employeeDeliveryIds)
     } else if (accountScopeOr) {
       q = q.or(accountScopeOr)
     }
@@ -181,6 +181,18 @@ export async function getStats(accountId?: string, employeeId?: string, excludeD
   ])
 
   return { total, pendingReview, accepted, expired: expiredExplicit + expiredByDate }
+}
+
+// Once an admin has converted a quotation to an invoice, the quotation is
+// frozen from every customer-facing action (accept/decline/rewards credit) —
+// only admin's own PATCH /:id can still touch it. Used by acceptQuotation,
+// declineQuotation, and applyRewardsCredit.
+export async function hasInvoice(quotationId: string): Promise<boolean> {
+  const { count } = await supabase
+    .from('invoices')
+    .select('id', { count: 'exact', head: true })
+    .eq('quotation_id', quotationId)
+  return (count ?? 0) > 0
 }
 
 // ── Acceptances (audit log) ───────────────────────────────────────────────────

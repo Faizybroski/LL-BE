@@ -5,7 +5,6 @@ import helmet from 'helmet'
 import compression from 'compression'
 import { env, allowedOrigins } from './lib/env'
 import { requestLogger } from './middleware/request-logger.middleware'
-import { defaultLimiter } from './middleware/rate-limit.middleware'
 import { timeoutMiddleware } from './middleware/timeout.middleware'
 import { notFoundMiddleware } from './middleware/not-found.middleware'
 import { errorMiddleware } from './middleware/error.middleware'
@@ -49,9 +48,12 @@ export function createApp(): express.Application {
   app.use(compression())
 
   // ── Rate limiting ─────────────────────────────────────────────────────────
-  // Before body parsing — a client that's already over the limit shouldn't
-  // cost us a JSON parse (up to 1MB) on every rejected request.
-  app.use(defaultLimiter)
+  // No blanket limiter on the app — this is an authenticated internal
+  // dashboard, not a public API, and a single IP-keyed bucket over every
+  // route (shared by everyone behind the same office/NAT IP) was producing
+  // 429s from ordinary multi-tab usage, not abuse. Login/MFA keep their own
+  // tight authLimiter (see auth.routes.ts) — that's the actual brute-force
+  // surface and stays protected.
 
   // ── Body parsing ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: '1mb' }))

@@ -114,7 +114,7 @@ export async function deleteNote(req: Request, res: Response, next: NextFunction
   }
 }
 
-// ── Shipper: own profile ──────────────────────────────────────────────────────
+// ── Corporate: own profile ──────────────────────────────────────────────────────
 export async function getMyProfile(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const profile = await accountsService.getOwnProfile(req.user!.id)

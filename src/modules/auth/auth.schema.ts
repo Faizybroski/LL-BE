@@ -34,7 +34,7 @@ export const registerSchema = z
       .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
       .regex(/[0-9]/, 'Password must contain at least one number'),
     fullName: z.string().min(2, 'Full name must be at least 2 characters').max(100),
-    // 'corporate' = shipping company (creates an accounts row, role='shipper');
+    // 'corporate' = shipping company (creates an accounts row, role='corporate');
     // 'residential' = individual customer (no accounts row, role='residential').
     accountType: z.enum(['corporate', 'residential']).default('corporate'),
     company: z.string().min(2, 'Company name is required').max(200).optional(),

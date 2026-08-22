@@ -33,6 +33,24 @@ function diagnosticFields(err: Error, req: Request) {
   }
 }
 
+// Dev-only: surface the real underlying error (Supabase/Postgres cause, etc.)
+// behind AppError's fixed, user-facing message — e.g. "Failed to create
+// delivery" becomes "Failed to create delivery: new row violates row-level
+// security policy for table \"shipment_status_history\" (42501)". Never runs
+// in production — those responses (and the toasts built from them) keep the
+// fixed message so internals aren't leaked to end users.
+function devErrorMessage(err: AppError): string {
+  const cause = err.cause as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown } | undefined
+  if (!cause || typeof cause !== 'object') return err.message
+  const causeMessage = typeof cause.message === 'string' ? cause.message : undefined
+  if (!causeMessage) return err.message
+  const bits = [causeMessage]
+  if (cause.details) bits.push(String(cause.details))
+  if (cause.hint) bits.push(`hint: ${String(cause.hint)}`)
+  const suffix = cause.code ? ` (${String(cause.code)})` : ''
+  return `${err.message}: ${bits.join(' — ')}${suffix}`
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function errorMiddleware(err: Error, req: Request, res: Response, _next: NextFunction): void {
   // Ensure CORS headers are present on every error response.
@@ -55,7 +73,9 @@ export function errorMiddleware(err: Error, req: Request, res: Response, _next: 
       logger.error(err.message, { stack: err.stack, url: req.url, method: req.method })
       logger.error('DIAGNOSTIC AppError >=500', diagnosticFields(err, req))
     }
-    errorResponse(res, err.statusCode, err.message, err.code, err.details)
+    const message =
+      err.statusCode >= 500 && env.NODE_ENV !== 'production' ? devErrorMessage(err) : err.message
+    errorResponse(res, err.statusCode, message, err.code, err.details)
     return
   }
 

@@ -50,7 +50,7 @@ async function resolveAuthors<T extends { [key: string]: unknown }>(
 }
 
 // ── Scoping ────────────────────────────────────────────────────────────────────
-// Shippers can only create, edit, and track their OWN tickets — not their
+// Corporates can only create, edit, and track their OWN tickets — not their
 // company's. Admin has unrestricted access (complete management).
 function assertCanAccessCase(
   caseRow: { created_by: string },
@@ -69,7 +69,7 @@ export async function listCases(
   callerRole: string,
   callerId: string,
 ) {
-  // Non-admins (shippers, residential customers) only ever see cases they
+  // Non-admins (corporates, residential customers) only ever see cases they
   // personally raised. Admin manages system-wide and may additionally filter
   // to a specific user's cases (e.g. a residential customer's detail page).
   const createdBy = callerRole !== 'admin' ? callerId : query.userId
@@ -126,7 +126,7 @@ export async function getCase(
 
 export async function createCase(dto: CreateCaseDto, createdBy: string, callerRole: string) {
   let accountId: string | null = null
-  if (callerRole === 'shipper') {
+  if (callerRole === 'corporate') {
     const { data: profile, error: profileErr } = await repo.findAccountIdByUserId(createdBy)
     if (profileErr) throw AppError.internal('Failed to resolve account for support case', profileErr)
     accountId = (profile?.account_id as string | null) ?? null
@@ -177,7 +177,7 @@ export async function updateCaseStatus(
   return updated
 }
 
-// Shipper: only the creator, and only while the case is still open/in progress.
+// Corporate: only the creator, and only while the case is still open/in progress.
 // Admin: complete management — can edit any case regardless of status.
 export async function updateCase(
   id: string,
@@ -238,7 +238,7 @@ export async function addComment(
       id,
     )
   } else if (callerRole !== 'admin') {
-    // ...and notify platform admins when the shipper is the one replying.
+    // ...and notify platform admins when the corporate is the one replying.
     void notificationsService.notifyAllAdmins(
       'support_case_replied',
       'New reply on support case',

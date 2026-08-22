@@ -10,9 +10,9 @@ export interface JwtPayload {
   sub:         string          // user ID (Supabase auth.users.id)
   email:       string
   role:        UserRole
-  accountId:   string | null   // shipper's account; null for admin users
+  accountId:   string | null   // corporate's account; null for admin users
   companyRole: CompanyRole      // company_admin | employee | null (null for admins)
-  adminRole?:  AdminRole        // ceo | vp | manager | assistant | null (null for shippers)
+  adminRole?:  AdminRole        // ceo | vp | manager | assistant | null (null for corporates)
   permissions?: string[]        // resolved granted permission keys for adminRole, snapshotted at issue time
   iat:         number          // issued-at  (added automatically by jsonwebtoken)
   exp:         number          // expiry     (added automatically by jsonwebtoken)

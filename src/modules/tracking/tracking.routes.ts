@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authMiddleware } from '../../middleware/auth.middleware'
-import { requireRole } from '../../middleware/role.middleware'
+import { requireAdmin, requirePermission } from '../../middleware/role.middleware'
 import { validate } from '../../lib/validate'
 import {
   createTrackingEventSchema,
@@ -11,20 +11,23 @@ import * as trackingController from './tracking.controller'
 
 export const trackingRouter = Router()
 
-// ── Events for a specific load ─────────────────────────────────────────────────
+// ── Events for a specific delivery ─────────────────────────────────────────────────
 trackingRouter.get(
-  '/loads/:loadId/events',
+  '/deliveries/:loadId/events',
   authMiddleware,
   validate(listTrackingEventsSchema, 'query'),
-  trackingController.listByLoad,
+  trackingController.listByDelivery,
 )
 
 // ── Collection (create) ────────────────────────────────────────────────────────
-// Residential customers only ever read tracking events for their own load.
+// Tracking history is Logical Links staff-only, gated by the same
+// CEO-configurable "deliveries.update_status" permission as delivery status
+// changes — customers (residential and corporate) may only ever read it.
 trackingRouter.post(
   '/',
   authMiddleware,
-  requireRole('admin', 'shipper'),
+  requireAdmin,
+  requirePermission('deliveries.update_status'),
   validate(createTrackingEventSchema),
   trackingController.create,
 )
@@ -35,9 +38,16 @@ trackingRouter.get('/:id', authMiddleware, trackingController.getOne)
 trackingRouter.patch(
   '/:id',
   authMiddleware,
-  requireRole('admin', 'shipper'),
+  requireAdmin,
+  requirePermission('deliveries.update_status'),
   validate(updateTrackingEventSchema),
   trackingController.update,
 )
 
-trackingRouter.delete('/:id', authMiddleware, requireRole('admin', 'shipper'), trackingController.remove)
+trackingRouter.delete(
+  '/:id',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('deliveries.update_status'),
+  trackingController.remove,
+)

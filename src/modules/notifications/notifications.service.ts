@@ -48,7 +48,7 @@ export async function markAllRead(userId: string) {
   if (error) throw AppError.internal('Failed to mark notifications as read', error)
 }
 
-// ── Shipper-initiated actions → platform admins ────────────────────────────────
+// ── Corporate-initiated actions → platform admins ────────────────────────────────
 // Fire-and-forget, same convention as every module-local `notifyUser` helper —
 // notifications must never block the caller's main operation.
 export async function notifyAllAdmins(
@@ -102,7 +102,7 @@ export async function createAlert(dto: CreateAlertDto) {
       .eq('company_role', 'company_admin')
       .maybeSingle()
 
-    if (!admin) throw AppError.notFound('Company Admin for this shipper')
+    if (!admin) throw AppError.notFound('Company Admin for this corporate')
 
     const { data, error } = await notificationsRepo.create({ ...base, user_id: admin.id })
     if (error) throw AppError.internal('Failed to create alert', error)
@@ -112,11 +112,11 @@ export async function createAlert(dto: CreateAlertDto) {
   const { data: admins, error: adminsError } = await supabase
     .from('profiles')
     .select('id')
-    .eq('role', 'shipper')
+    .eq('role', 'corporate')
     .eq('company_role', 'company_admin')
     .eq('is_active', true)
 
-  if (adminsError) throw AppError.internal('Failed to look up shippers', adminsError)
+  if (adminsError) throw AppError.internal('Failed to look up corporates', adminsError)
   if (!admins || admins.length === 0) return { sent: 0, notifications: [] }
 
   const rows = admins.map((a: { id: string }) => ({ ...base, user_id: a.id }))

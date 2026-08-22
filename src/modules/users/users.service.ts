@@ -71,11 +71,11 @@ export async function listUsers(query: ListUsersQuery) {
 
 export async function updateUserRole(id: string, dto: UpdateUserRoleDto) {
   // Clear the role-specific sub-fields on every flip. Without this, an admin
-  // demoted to shipper and later re-promoted to admin would silently regain
+  // demoted to corporate and later re-promoted to admin would silently regain
   // their old admin_role (e.g. 'ceo') and its permissions without anyone
   // explicitly re-granting them — a stale-privilege reinstatement bug.
   const updates: Record<string, unknown> = { role: dto.role }
-  if (dto.role === 'shipper') {
+  if (dto.role === 'corporate') {
     updates.admin_role = null
   } else if (dto.role === 'admin') {
     updates.admin_role = null
@@ -130,7 +130,7 @@ export async function approveUser(id: string, dto: ApproveUserDto) {
         userId:     id,
         type:       'system',
         title:      'Account approved',
-        body:       'Your shipper account has been approved. You now have full access.',
+        body:       'Your corporate account has been approved. You now have full access.',
         entityType: 'account',
         entityId:   id,
       })

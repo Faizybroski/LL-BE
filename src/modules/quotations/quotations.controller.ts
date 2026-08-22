@@ -7,7 +7,7 @@ import type {
   UpdateQuotationDto,
   ListQuotationsQuery,
   AcceptQuotationDto,
-  ResidentialQuoteRequestDto,
+  DecideAutoQuoteDto,
   CorporateQuoteRequestDto,
 } from './quotations.schema'
 
@@ -70,12 +70,19 @@ export async function create(req: Request, res: Response, next: NextFunction): P
   }
 }
 
-export async function createResidentialQuote(req: Request, res: Response, next: NextFunction): Promise<void> {
+// Shared by both self-service instant-quote flows — POST
+// /residential-quote/decide (role='residential') and POST
+// /corporate-quote/decide (role='corporate', company admin only). Creates the
+// quotation directly at its decided status; see service.decideAutoQuote.
+export async function decideAutoQuote(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const quotation = await service.createResidentialQuote(
+    const quotation = await service.decideAutoQuote(
+      req.body as DecideAutoQuoteDto,
       req.user!.id,
+      req.user!.role as 'residential' | 'corporate',
       req.user!.email,
-      req.body as ResidentialQuoteRequestDto,
+      req.user!.accountId,
+      requestContext(req),
     )
     created(res, quotation, 'Quote generated')
   } catch (err) {
@@ -102,8 +109,6 @@ export async function update(req: Request, res: Response, next: NextFunction): P
       param(req, 'id'),
       req.body as UpdateQuotationDto,
       req.user!.role,
-      req.user!.id,
-      req.user!.companyRole,
       req.user!.accountId,
     )
     ok(res, quotation, 'Quotation updated')
@@ -117,8 +122,6 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
     await service.deleteQuotation(
       param(req, 'id'),
       req.user!.role,
-      req.user!.id,
-      req.user!.companyRole,
       req.user!.accountId,
     )
     noContent(res)
@@ -157,7 +160,6 @@ export async function accept(req: Request, res: Response, next: NextFunction): P
       req.body as AcceptQuotationDto,
       req.user!.id,
       req.user!.role,
-      req.user!.companyRole,
       req.user!.accountId,
       requestContext(req),
     )
@@ -173,7 +175,6 @@ export async function decline(req: Request, res: Response, next: NextFunction): 
       param(req, 'id'),
       req.user!.id,
       req.user!.role,
-      req.user!.companyRole,
       req.user!.accountId,
     )
     ok(res, quotation, 'Quotation declined')

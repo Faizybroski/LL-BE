@@ -4,16 +4,16 @@ import * as repo from './quotations.repository'
 import * as notificationsService from '../notifications/notifications.service'
 import * as rewardsCreditService from '../rewards-credit/rewards-credit.service'
 import * as pricingService from '../pricing/pricing.service'
-import * as shipmentsService from '../shipments/shipments.service'
+import * as deliveriesService from '../deliveries/deliveries.service'
 import { generateAndUploadQuotationPdf } from '../../services/pdf.service'
 import type { UserRole } from '../../middleware/auth.middleware'
-import type { CreateShipmentDto } from '../shipments/shipments.schema'
+import type { CreateDeliveryDto } from '../deliveries/deliveries.schema'
 import type {
   CreateQuotationDto,
   UpdateQuotationDto,
   ListQuotationsQuery,
   AcceptQuotationDto,
-  ResidentialQuoteRequestDto,
+  DecideAutoQuoteDto,
   CorporateQuoteRequestDto,
 } from './quotations.schema'
 
@@ -37,7 +37,7 @@ function computeTotals(items: { quantity: number; unit_price: number }[], discou
   return { subtotal: Math.round(subtotal * 100) / 100, tax, total }
 }
 
-// Corporate customers (role='shipper') have no employees of their own — one
+// Corporate customers (role='corporate') have no employees of their own — one
 // login per account — so the only non-admin, non-residential scope is by account.
 export async function listQuotations(
   query: ListQuotationsQuery,
@@ -45,14 +45,14 @@ export async function listQuotations(
   callerId: string,
   callerAccountId?: string | null,
 ) {
-  const accountId    = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
+  const accountId    = callerRole === 'corporate' ? (callerAccountId ?? undefined) : undefined
   // Residential customers only ever see their own quotations (profile_id match) —
   // without this they fell through with no scope at all and could list every
   // company's quotations system-wide (see [[customer_types]] "grep every module
-  // for callerRole === 'shipper'" lesson — this module had the exact gap).
+  // for callerRole === 'corporate'" lesson — this module had the exact gap).
   const profileId     = callerRole === 'residential' ? callerId : undefined
   // Customers never see internal drafts — only quotations that have been issued to them.
-  const excludeDraft = callerRole === 'shipper' || callerRole === 'residential'
+  const excludeDraft = callerRole === 'corporate' || callerRole === 'residential'
   const { data, count, error } = await repo.findAll(query, accountId, undefined, excludeDraft, profileId)
   if (error) throw AppError.internal('Failed to fetch quotations', error)
   return { quotations: data ?? [], total: count ?? 0 }
@@ -63,9 +63,9 @@ export async function getQuotationStats(
   callerId: string,
   callerAccountId?: string | null,
 ) {
-  const accountId    = callerRole === 'shipper' ? (callerAccountId ?? undefined) : undefined
+  const accountId    = callerRole === 'corporate' ? (callerAccountId ?? undefined) : undefined
   const profileId     = callerRole === 'residential' ? callerId : undefined
-  const excludeDraft = callerRole === 'shipper' || callerRole === 'residential'
+  const excludeDraft = callerRole === 'corporate' || callerRole === 'residential'
   return repo.getStats(accountId, undefined, excludeDraft, profileId)
 }
 
@@ -81,7 +81,7 @@ export async function getQuotation(
   if (callerRole === 'residential') {
     // Customers never see internal drafts — treat as not found, same as any other doc they can't access.
     if (data.status === 'draft' || data.profile_id !== callerId) throw AppError.notFound('Quotation')
-  } else if (callerRole === 'shipper') {
+  } else if (callerRole === 'corporate') {
     if (!callerAccountId) throw AppError.forbidden()
     // Customers never see internal drafts — treat as not found, same as any other doc they can't access.
     if (data.status === 'draft') throw AppError.notFound('Quotation')
@@ -170,7 +170,7 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
     void notificationsService.notifyAllAdmins(
       'quotation_sent',
       'Quotation sent',
-      `Quotation ${quotationNumber} was sent to a shipper.`,
+      `Quotation ${quotationNumber} was sent to a corporate.`,
       'quotation',
       quotation.id,
     )
@@ -180,15 +180,28 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
   return full
 }
 
-// ── POST /quotations/residential-quote ──────────────────────────────────────────
-// Residential self-service: price it instantly from the pricing library and
-// hand back an already-`sent` quotation the customer can accept right away.
-export async function createResidentialQuote(callerId: string, callerEmail: string, dto: ResidentialQuoteRequestDto) {
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('full_name, phone')
-    .eq('id', callerId)
-    .maybeSingle()
+// ── POST /quotations/{residential,corporate}-quote/decide ──────────────────────
+// Self-service instant quote, for both residential customers (always) and
+// corporate customers (their "same as residential" option instead of a
+// manual request). The price-preview step itself is just POST
+// /pricing/calculate — nothing is written to the DB until the customer
+// decides. The quotation is created here directly at its final status,
+// 'accepted' or 'rejected' — it never passes through 'sent', since it was
+// never sent to anyone for review.
+export async function decideAutoQuote(
+  dto: DecideAutoQuoteDto,
+  callerId: string,
+  callerRole: 'residential' | 'corporate',
+  callerEmail: string,
+  callerAccountId: string | null | undefined,
+  context: { ipAddress?: string; userAgent?: string },
+) {
+  const [{ data: profile }, { data: account }] = await Promise.all([
+    supabase.from('profiles').select('full_name, phone').eq('id', callerId).maybeSingle(),
+    callerRole === 'corporate' && callerAccountId
+      ? supabase.from('accounts').select('account_name').eq('account_id', callerAccountId).maybeSingle()
+      : Promise.resolve({ data: null as { account_name: string } | null }),
+  ])
 
   const breakdown = await pricingService.calculateDeliveryPrice({
     serviceType:          dto.serviceType,
@@ -225,14 +238,18 @@ export async function createResidentialQuote(callerId: string, callerEmail: stri
     })),
   ]
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today  = new Date().toISOString().slice(0, 10)
+  const nowIso = new Date().toISOString()
+  const status = dto.decision === 'accept' ? 'accepted' : 'rejected'
 
-  return createQuotation(
+  const created = await createQuotation(
     {
       profileId:    callerId,
-      status:       'sent',
+      status,
       issueDate:    today,
-      customerName:    dto.customerName || (profile?.full_name as string | null) || 'Residential Customer',
+      customerName:    dto.customerName || (profile?.full_name as string | null) ||
+        (callerRole === 'residential' ? 'Residential Customer' : 'Shipping Company Contact'),
+      customerCompany: callerRole === 'corporate' ? (dto.customerCompany || account?.account_name || null) : null,
       customerEmail:   dto.customerEmail || callerEmail,
       customerPhone:   dto.customerPhone || (profile?.phone as string | null) || null,
       currency:     'CAD',
@@ -260,6 +277,50 @@ export async function createResidentialQuote(callerId: string, callerEmail: stri
     } as CreateQuotationDto,
     callerId,
   )
+
+  const quotationId     = (created as { id: string }).id
+  const quotationNumber = (created as { quotation_number: string }).quotation_number
+
+  if (dto.decision === 'accept') {
+    await repo.update(quotationId, { accepted_at: nowIso })
+
+    const { fullName, companyName } = await acceptanceIdentity(callerId, callerAccountId)
+    // A bare IPv4/IPv6 shape check — an empty string or garbled proxy header
+    // would otherwise reach the ip_address INET column and fail the insert.
+    const ipAddress = context.ipAddress && /^[0-9a-fA-F.:]+$/.test(context.ipAddress) ? context.ipAddress : null
+    const { error: acceptError } = await repo.createAcceptance({
+      quotation_id:  quotationId,
+      user_id:       callerId,
+      full_name:     fullName,
+      company_name:  companyName,
+      ip_address:    ipAddress,
+      user_agent:    context.userAgent ?? null,
+      terms_version: dto.termsVersion as string,
+    })
+    if (acceptError) throw AppError.internal('Failed to record acceptance', acceptError)
+
+    void notificationsService.notifyAllAdmins(
+      'quotation_accepted',
+      'Quotation accepted',
+      `Quotation ${quotationNumber} has been accepted${companyName ? ` by ${companyName}` : ''}.`,
+      'quotation',
+      quotationId,
+    )
+
+    await createDeliveryFromAcceptedQuotation(created as Record<string, unknown>, quotationId, callerId, callerRole as UserRole)
+  } else {
+    await repo.update(quotationId, { declined_at: nowIso })
+    void notificationsService.notifyAllAdmins(
+      'quotation_rejected',
+      'Quotation declined',
+      `Quotation ${quotationNumber} has been declined.`,
+      'quotation',
+      quotationId,
+    )
+  }
+
+  const { data: full } = await repo.findById(quotationId)
+  return full
 }
 
 // ── POST /quotations/request ──────────────────────────────────────────────────
@@ -306,50 +367,50 @@ export async function createCorporateQuoteRequest(callerId: string, callerAccoun
     callerId,
   )
 
+  const quotationId = (created as { id: string }).id
+
+  // No price yet — just a wishlist so admin's Pricing Calculator can
+  // pre-tick the same options the customer asked for (migration 062).
+  if (dto.additionalChargeKeys.length > 0) {
+    await repo.update(quotationId, { requested_additional_charge_keys: dto.additionalChargeKeys })
+  }
+
   const companyName = (account?.account_name as string | null) ?? 'A shipping company'
   void notificationsService.notifyAllAdmins(
     'quotation_requested',
     'New quote request',
     `${companyName} requested a quote for a new delivery.`,
     'quotation',
-    (created as { id: string }).id,
+    quotationId,
   )
 
-  return created
+  const { data: full } = await repo.findById(quotationId)
+  return full
 }
 
 export async function updateQuotation(
   id: string,
   dto: UpdateQuotationDto,
   callerRole: string,
-  callerId?: string,
-  companyRole?: string | null,
   callerAccountId?: string | null,
 ) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Quotation')
 
-  if (callerRole === 'shipper' && existing.status !== 'draft') {
+  if (callerRole === 'corporate' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft quotations can be edited')
   }
 
-  // Accepted/Rejected are recorded exclusively via the shipper's /accept and
+  // Accepted/Rejected are recorded exclusively via the corporate's /accept and
   // /decline endpoints — this PATCH route is admin-only, so it may only move
   // a quotation between Draft and Sent.
   if (dto.status !== undefined && dto.status !== 'draft' && dto.status !== 'sent') {
-    throw AppError.forbidden('Status can only be set to Draft or Sent here — Accepted/Declined are set by the shipper')
+    throw AppError.forbidden('Status can only be set to Draft or Sent here — Accepted/Declined are set by the corporate')
   }
 
-  if (callerRole === 'shipper') {
-    if (companyRole === 'employee' && callerId) {
-      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
-        throw AppError.forbidden()
-      }
-    } else if (companyRole === 'company_admin' && callerAccountId) {
-      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
-        throw AppError.forbidden()
-      }
-    } else {
+  // Corporate customers have no employees of their own — one login per account.
+  if (callerRole === 'corporate') {
+    if (!callerAccountId || !(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }
   }
@@ -433,29 +494,21 @@ export async function updateQuotation(
 }
 
 // Shared by accept/decline — same membership check used elsewhere in this module.
+// Corporate customers have no employees of their own — one login per account.
 async function assertCustomerCanActOn(
   quotation: { load_id: string | null; profile_id: string },
   callerId: string,
   callerRole: string,
-  companyRole: string | null | undefined,
   callerAccountId: string | null | undefined,
 ): Promise<void> {
-  // Residential customers have no companyRole/account — a quotation belongs to
-  // them directly via profile_id, same as it belongs to a shipper via account.
+  // Residential customers have no account — a quotation belongs to
+  // them directly via profile_id, same as it belongs to a corporate via account.
   if (callerRole === 'residential') {
     if (quotation.profile_id !== callerId) throw AppError.forbidden()
     return
   }
 
-  if (companyRole === 'employee') {
-    if (!quotation.load_id || !(await repo.loadBelongsToEmployee(quotation.load_id, callerId))) {
-      throw AppError.forbidden()
-    }
-  } else if (companyRole === 'company_admin' && callerAccountId) {
-    if (!(await repo.documentBelongsToCompany(quotation.load_id, quotation.profile_id, callerAccountId))) {
-      throw AppError.forbidden()
-    }
-  } else {
+  if (!callerAccountId || !(await repo.documentBelongsToCompany(quotation.load_id, quotation.profile_id, callerAccountId))) {
     throw AppError.forbidden()
   }
 }
@@ -470,32 +523,32 @@ async function acceptanceIdentity(userId: string, accountId: string | null | und
   return { fullName: (profile?.full_name as string | null) ?? null, companyName }
 }
 
-// Creates the matching shipment the moment a quotation is accepted (both
+// Creates the matching delivery the moment a quotation is accepted (both
 // residential and corporate). Fails closed with a clear error rather than
 // silently leaving an accepted quotation with no delivery — quotations from
 // before this feature (or admin-authored ones missing structured address
 // fields) won't have everything this needs.
-const SHIPMENT_REQUIRED_FIELDS = [
+const DELIVERY_REQUIRED_FIELDS = [
   'origin_address', 'origin_city', 'origin_state', 'origin_postcode',
   'destination_address', 'destination_city', 'destination_state', 'destination_postcode',
   'cargo_description',
 ] as const
 
-async function createShipmentFromAcceptedQuotation(
+async function createDeliveryFromAcceptedQuotation(
   quotation: Record<string, unknown>,
   quotationId: string,
   callerId: string,
   callerRole: UserRole,
 ): Promise<void> {
-  const missing = SHIPMENT_REQUIRED_FIELDS.filter((key) => !quotation[key])
+  const missing = DELIVERY_REQUIRED_FIELDS.filter((key) => !quotation[key])
   if (missing.length > 0) {
     throw AppError.unprocessable(
-      'This quotation is missing delivery details required to create a shipment — contact support',
+      'This quotation is missing delivery details required to create a delivery — contact support',
     )
   }
 
-  const dto: CreateShipmentDto = {
-    shipmentType:  quotation.service_type ? 'last_mile' : 'freight',
+  const dto: CreateDeliveryDto = {
+    deliveryType:  quotation.service_type ? 'last_mile' : 'freight',
     serviceType:   (quotation.service_type as string | null) ?? undefined,
     serviceLevel:  (quotation.service_level as string | null) ?? undefined,
     preferredDeliveryDate: (quotation.preferred_delivery_date as string | null) ?? undefined,
@@ -520,8 +573,8 @@ async function createShipmentFromAcceptedQuotation(
     ...(callerRole === 'residential' ? { customerId: callerId } : {}),
   }
 
-  const shipment = await shipmentsService.createShipment(dto, callerId, callerRole)
-  await repo.update(quotationId, { load_id: (shipment as { shipment_id: string }).shipment_id })
+  const delivery = await deliveriesService.createDelivery(dto, callerId, callerRole)
+  await repo.update(quotationId, { load_id: (delivery as { shipment_id: string }).shipment_id })
 }
 
 // ── POST /:id/accept ──────────────────────────────────────────────────────────
@@ -530,16 +583,33 @@ export async function acceptQuotation(
   dto: AcceptQuotationDto,
   callerId: string,
   callerRole: string,
-  companyRole: string | null | undefined,
   callerAccountId: string | null | undefined,
   context: { ipAddress?: string; userAgent?: string },
 ) {
-  if (callerRole !== 'shipper' && callerRole !== 'residential') throw AppError.forbidden('Only customers can accept quotations')
+  if (callerRole !== 'corporate' && callerRole !== 'residential') throw AppError.forbidden('Only customers can accept quotations')
 
   const { data: existing } = await repo.findById(id)
   if (!existing || existing.status === 'draft') throw AppError.notFound('Quotation')
 
-  await assertCustomerCanActOn(existing, callerId, callerRole, companyRole, callerAccountId)
+  await assertCustomerCanActOn(existing, callerId, callerRole, callerAccountId)
+
+  // Once an admin has converted this quotation to an invoice, it's frozen
+  // from every customer-facing action — only admin's own PATCH /:id can
+  // still touch it.
+  if (await repo.hasInvoice(id)) {
+    throw AppError.conflict('An invoice has already been created from this quotation — contact support for further changes')
+  }
+
+  // A quotation can be legitimately "accepted" with no delivery yet if a
+  // prior attempt recorded the acceptance (a compliance record — never
+  // rolled back, see createAcceptance) but then failed to create the
+  // matching delivery (e.g. the RLS gap fixed in migration 058). Retry
+  // delivery creation here instead of conflicting forever with no way out.
+  if (existing.status === 'accepted' && !existing.load_id) {
+    await createDeliveryFromAcceptedQuotation(existing, id, callerId, callerRole as UserRole)
+    const { data: healed } = await repo.findById(id)
+    return healed
+  }
 
   if (existing.status === 'accepted') throw AppError.conflict('Quotation has already been accepted')
   if (existing.status === 'rejected') throw AppError.conflict('Quotation has already been declined')
@@ -586,7 +656,7 @@ export async function acceptQuotation(
     id,
   )
 
-  await createShipmentFromAcceptedQuotation(existing, id, callerId, callerRole as UserRole)
+  await createDeliveryFromAcceptedQuotation(existing, id, callerId, callerRole as UserRole)
 
   const { data: full } = await repo.findById(id)
   return full
@@ -597,15 +667,21 @@ export async function declineQuotation(
   id: string,
   callerId: string,
   callerRole: string,
-  companyRole: string | null | undefined,
   callerAccountId: string | null | undefined,
 ) {
-  if (callerRole !== 'shipper' && callerRole !== 'residential') throw AppError.forbidden('Only customers can decline quotations')
+  if (callerRole !== 'corporate' && callerRole !== 'residential') throw AppError.forbidden('Only customers can decline quotations')
 
   const { data: existing } = await repo.findById(id)
   if (!existing || existing.status === 'draft') throw AppError.notFound('Quotation')
 
-  await assertCustomerCanActOn(existing, callerId, callerRole, companyRole, callerAccountId)
+  await assertCustomerCanActOn(existing, callerId, callerRole, callerAccountId)
+
+  // Once an admin has converted this quotation to an invoice, it's frozen
+  // from every customer-facing action — only admin's own PATCH /:id can
+  // still touch it.
+  if (await repo.hasInvoice(id)) {
+    throw AppError.conflict('An invoice has already been created from this quotation — contact support for further changes')
+  }
 
   if (existing.status === 'accepted') throw AppError.conflict('Quotation has already been accepted')
   if (existing.status === 'rejected') throw AppError.conflict('Quotation has already been declined')
@@ -631,27 +707,18 @@ export async function declineQuotation(
 export async function deleteQuotation(
   id: string,
   callerRole: string,
-  callerId?: string,
-  companyRole?: string | null,
   callerAccountId?: string | null,
 ) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Quotation')
 
-  if (callerRole === 'shipper' && existing.status !== 'draft') {
+  if (callerRole === 'corporate' && existing.status !== 'draft') {
     throw AppError.forbidden('Only draft quotations can be deleted')
   }
 
-  if (callerRole === 'shipper') {
-    if (companyRole === 'employee' && callerId) {
-      if (!existing.load_id || !(await repo.loadBelongsToEmployee(existing.load_id, callerId))) {
-        throw AppError.forbidden()
-      }
-    } else if (companyRole === 'company_admin' && callerAccountId) {
-      if (!(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
-        throw AppError.forbidden()
-      }
-    } else {
+  // Corporate customers have no employees of their own — one login per account.
+  if (callerRole === 'corporate') {
+    if (!callerAccountId || !(await repo.documentBelongsToCompany(existing.load_id, existing.profile_id, callerAccountId))) {
       throw AppError.forbidden()
     }
   }
@@ -716,6 +783,13 @@ export async function applyRewardsCredit(id: string, callerId: string, callerRol
     throw AppError.forbidden('Only the residential customer this quotation belongs to can apply Rewards Credit')
   }
 
+  // Once an admin has converted this quotation to an invoice, it's frozen
+  // from every customer-facing action — only admin's own PATCH /:id can
+  // still touch it.
+  if (await repo.hasInvoice(id)) {
+    throw AppError.conflict('An invoice has already been created from this quotation — contact support for further changes')
+  }
+
   if (quotation.status !== 'sent') {
     throw AppError.unprocessable('Rewards Credit can only be applied to a quotation awaiting review')
   }
@@ -746,7 +820,7 @@ export async function generatePdf(
   callerAccountId?: string | null,
   callerId?: string,
 ) {
-  // Reuses getQuotation's ownership check (also hides drafts from shippers).
+  // Reuses getQuotation's ownership check (also hides drafts from corporates).
   const data = await getQuotation(id, callerRole, callerAccountId, callerId)
 
   const pdfUrl = await generateAndUploadQuotationPdf(data)

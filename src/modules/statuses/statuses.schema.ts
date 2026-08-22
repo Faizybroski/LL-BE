@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-// ── System status slugs (mirror of shipments.SHIPMENT_STATUSES) ────────────────
+// ── System status slugs (mirror of deliveries.DELIVERY_STATUSES) ────────────────
 // These are protected: they cannot be renamed, edited, or deleted.
 export const SYSTEM_STATUS_SLUGS = [
   'pending',

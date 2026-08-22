@@ -28,14 +28,14 @@ function notifyUser(
       type:       'tracking_event_created',
       title,
       body,
-      entityType: 'shipment',
+      entityType: 'delivery',
       entityId,
     })
     .catch(() => undefined)
 }
 
-// ── Access: verify user can see / modify this load ────────────────────────────
-async function requireLoadAccess(
+// ── Access: verify user can see / modify this delivery ────────────────────────────
+async function requireDeliveryAccess(
   loadId:      string,
   isAdmin:     boolean,
   accountId?:  string | null,
@@ -45,29 +45,29 @@ async function requireLoadAccess(
 ): Promise<Row> {
   const { data, error } = await supabase
     .from('shipments')
-    .select('shipment_id, account_id, customer_id, assigned_employee_id, created_by')
+    .select('shipment_id, account_id, customer_id, created_by')
     .eq('shipment_id', loadId)
     .is('deleted_at', null)
     .single()
 
-  if (error || !data) throw AppError.notFound('Load')
-  const load = cast<Row>(data)
+  if (error || !data) throw AppError.notFound('Delivery')
+  const delivery = cast<Row>(data)
 
   if (!isAdmin) {
     if (isResidential) {
-      if (load.customer_id !== userId) {
-        throw AppError.forbidden('You do not have access to this load')
+      if (delivery.customer_id !== userId) {
+        throw AppError.forbidden('You do not have access to this delivery')
       }
     } else {
       // Corporate customers have no employees of their own — one login per account.
-      const matchesAccount = accountId && load.account_id === accountId
-      const isCreator      = userId    && load.created_by  === userId
+      const matchesAccount = accountId && delivery.account_id === accountId
+      const isCreator      = userId    && delivery.created_by  === userId
       if (!matchesAccount && !isCreator) {
-        throw AppError.forbidden('You do not have access to this load')
+        throw AppError.forbidden('You do not have access to this delivery')
       }
     }
   }
-  return load
+  return delivery
 }
 
 // Determine the "created_by_role" string to store for the event.
@@ -75,7 +75,7 @@ function resolveEventRole(isAdmin: boolean): string {
   return isAdmin ? 'admin' : 'company_admin'
 }
 
-// ── List events for a load ────────────────────────────────────────────────────
+// ── List events for a delivery ────────────────────────────────────────────────────
 export async function listEvents(
   loadId:      string,
   query:       ListTrackingEventsQuery,
@@ -85,8 +85,8 @@ export async function listEvents(
   companyRole?: string | null,
   isResidential = false,
 ) {
-  await requireLoadAccess(loadId, isAdmin, accountId, userId, companyRole, isResidential)
-  const { data, count, error } = await trackingRepo.findByLoad(loadId, query)
+  await requireDeliveryAccess(loadId, isAdmin, accountId, userId, companyRole, isResidential)
+  const { data, count, error } = await trackingRepo.findByDelivery(loadId, query)
   if (error) throw AppError.internal('Failed to fetch tracking events', error)
   return { events: data ?? [], total: count ?? 0 }
 }
@@ -117,7 +117,7 @@ export async function getEvent(
   const { data, error } = await trackingRepo.findById(id)
   if (error || !data) throw AppError.notFound('Tracking event')
   const event = cast<Row>(data)
-  await requireLoadAccess(event.load_id as string, isAdmin, accountId, userId, companyRole, isResidential)
+  await requireDeliveryAccess(event.load_id as string, isAdmin, accountId, userId, companyRole, isResidential)
   return event
 }
 
@@ -129,7 +129,7 @@ export async function createEvent(
   accountId?:  string | null,
   companyRole?: string | null,
 ) {
-  const load = await requireLoadAccess(dto.loadId, isAdmin, accountId, userId, companyRole)
+  const delivery = await requireDeliveryAccess(dto.loadId, isAdmin, accountId, userId, companyRole)
 
   const { data, error } = await trackingRepo.create({
     load_id:         dto.loadId,
@@ -144,35 +144,39 @@ export async function createEvent(
   if (error) throw AppError.internal('Failed to create tracking event', error)
 
   // Notify relevant parties (fire-and-forget)
-  const shipLoad = cast<Row>(load)
+  const shipDelivery = cast<Row>(delivery)
   const title    = `Tracking update: ${dto.trackingStatus.replace(/_/g, ' ')}`
-  const body     = `Load has a new tracking event.`
+  const body     = `Delivery has a new tracking event.`
 
-  // Notify the load creator
-  if (shipLoad.created_by && shipLoad.created_by !== userId) {
-    notifyUser(shipLoad.created_by as string, title, body, dto.loadId)
+  // Notify the delivery creator
+  if (shipDelivery.created_by && shipDelivery.created_by !== userId) {
+    notifyUser(shipDelivery.created_by as string, title, body, dto.loadId)
   }
 
-  // Notify assigned employee if different from actor
-  if (shipLoad.assigned_employee_id && shipLoad.assigned_employee_id !== userId) {
-    notifyUser(shipLoad.assigned_employee_id as string, title, body, dto.loadId)
+  // Notify everyone assigned to this delivery, other than the actor
+  const { data: assignees } = await supabase
+    .from('delivery_assignments')
+    .select('employee_id')
+    .eq('delivery_id', dto.loadId)
+  for (const assignee of assignees ?? []) {
+    if (assignee.employee_id !== userId) notifyUser(assignee.employee_id as string, title, body, dto.loadId)
   }
 
   // Notify company admins if admin created this event
-  if (isAdmin && shipLoad.account_id) {
+  if (isAdmin && shipDelivery.account_id) {
     const { data: companyAdmins } = await supabase
       .from('profiles')
       .select('id')
-      .eq('account_id', shipLoad.account_id)
+      .eq('account_id', shipDelivery.account_id)
       .eq('company_role', 'company_admin')
     for (const admin of companyAdmins ?? []) {
       notifyUser(admin.id, title, body, dto.loadId)
     }
   }
 
-  // Notify platform admins if a shipper/employee created this event
+  // Notify platform admins if a corporate/employee created this event
   if (!isAdmin) {
-    void notificationsService.notifyAllAdmins('tracking_event_created', title, body, 'shipment', dto.loadId)
+    void notificationsService.notifyAllAdmins('tracking_event_created', title, body, 'delivery', dto.loadId)
   }
 
   return data
@@ -191,14 +195,14 @@ export async function updateEvent(
   if (fetchErr || !raw) throw AppError.notFound('Tracking event')
   const event = cast<Row>(raw)
 
-  await requireLoadAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
+  await requireDeliveryAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
 
   // Ownership check: non-admins can only edit their own events
   if (!isAdmin) {
     const isCreator      = event.created_by === userId
     const isCompanyAdmin = companyRole === 'company_admin'
 
-    // Company admins can edit any event on their loads; employees only own events
+    // Company admins can edit any event on their deliveries; employees only own events
     if (!isCreator && !isCompanyAdmin) {
       throw AppError.forbidden('You can only edit your own tracking events')
     }
@@ -217,8 +221,8 @@ export async function updateEvent(
     void notificationsService.notifyAllAdmins(
       'tracking_event_updated',
       'Tracking event updated',
-      'A shipper updated a tracking event.',
-      'shipment',
+      'A corporate updated a tracking event.',
+      'delivery',
       event.load_id as string,
     )
   }
@@ -238,7 +242,7 @@ export async function deleteEvent(
   if (fetchErr || !raw) throw AppError.notFound('Tracking event')
   const event = cast<Row>(raw)
 
-  await requireLoadAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
+  await requireDeliveryAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
 
   if (!isAdmin) {
     const isCreator      = event.created_by === userId
@@ -255,8 +259,8 @@ export async function deleteEvent(
     void notificationsService.notifyAllAdmins(
       'tracking_event_deleted',
       'Tracking event deleted',
-      'A shipper deleted a tracking event.',
-      'shipment',
+      'A corporate deleted a tracking event.',
+      'delivery',
       event.load_id as string,
     )
   }

@@ -4,7 +4,7 @@ import * as notificationsService from '../notifications/notifications.service'
 import type { CreateNoteDto, UpdateNoteDto, ListNotesQuery } from './notes.schema'
 
 export async function listNotes(query: ListNotesQuery, callerRole: string) {
-  if ((query.entityType === 'shipper' || query.entityType === 'account') && callerRole !== 'admin') {
+  if ((query.entityType === 'corporate' || query.entityType === 'account') && callerRole !== 'admin') {
     throw AppError.forbidden('Only administrators can view company notes')
   }
   const { data, count, error } = await notesRepo.findAll(query)
@@ -13,14 +13,14 @@ export async function listNotes(query: ListNotesQuery, callerRole: string) {
 }
 
 export async function createNote(dto: CreateNoteDto, createdBy: string, callerRole: string) {
-  if ((dto.entityType === 'shipper' || dto.entityType === 'account') && callerRole !== 'admin') {
+  if ((dto.entityType === 'corporate' || dto.entityType === 'account') && callerRole !== 'admin') {
     throw AppError.forbidden('Only administrators can create company notes')
   }
   const { data, error } = await notesRepo.create({
     entity_type: dto.entityType,
     entity_id: dto.entityId,
     content: dto.content,
-    is_internal: (dto.entityType === 'shipper' || dto.entityType === 'account') ? true : false,
+    is_internal: (dto.entityType === 'corporate' || dto.entityType === 'account') ? true : false,
     created_by: createdBy,
   })
   if (error) throw AppError.internal('Failed to create note', error)

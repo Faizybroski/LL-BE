@@ -21,8 +21,9 @@ export const authRouter = Router()
 authRouter.post('/login',    authLimiter, validate(loginSchema),    authController.login)
 authRouter.post('/register', authLimiter, validate(registerSchema), authController.register)
 
-// Refresh & logout use the standard limiter (defaultLimiter is applied globally).
-// A separate tighter limiter can be added here if token farming becomes a concern.
+// Refresh is unthrottled — rotation + reuse-detection (see auth.service.ts)
+// already invalidates a whole session on a stolen/replayed refresh token.
+// A dedicated limiter can be added here if token farming becomes a concern.
 authRouter.post('/refresh', validate(refreshSchema), authController.refresh)
 
 // Second step of login when MFA is enabled — rate-limited like login itself.
