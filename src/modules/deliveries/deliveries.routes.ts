@@ -6,6 +6,7 @@ import {
   createDeliverySchema,
   updateDeliverySchema,
   updateDeliveryStatusSchema,
+  updateEtaSchema,
   deleteDeliverySchema,
   assignEmployeesSchema,
   listDeliveriesSchema,
@@ -32,6 +33,18 @@ deliveriesRouter.post(
   requirePermission('deliveries.create'),
   validate(createDeliverySchema),
   deliveriesController.create,
+)
+
+// Lean employee roster for the Assign picker — gated by 'deliveries.assign'
+// itself, not 'employees.view' (HR access), so anyone allowed to assign a
+// delivery can actually fetch who they're assigning it to. Must be declared
+// before '/:id' below or Express would match "assignable-employees" as an id.
+deliveriesRouter.get(
+  '/assignable-employees',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('deliveries.assign'),
+  deliveriesController.listAssignableEmployees,
 )
 
 // ── Single resource ───────────────────────────────────────────────────────────
@@ -67,6 +80,19 @@ deliveriesRouter.patch(
   requirePermission('deliveries.update_status'),
   validate(updateDeliveryStatusSchema),
   deliveriesController.updateStatus,
+)
+
+// ── ETA (any internal user) ───────────────────────────────────────────────────
+// Deliberately not gated behind 'deliveries.edit' — the ETA is set by
+// whichever Logical Links staff member has the update (ops, dispatch,
+// support), same as the Status and Tracking Update actions below/above,
+// none of which require the full-edit permission either.
+deliveriesRouter.patch(
+  '/:id/eta',
+  authMiddleware,
+  requireAdmin,
+  validate(updateEtaSchema),
+  deliveriesController.updateEta,
 )
 
 // ── Assign to Employees (admin only) ──────────────────────────────────────────

@@ -43,7 +43,7 @@ export async function listUsers(req: Request, res: Response, next: NextFunction)
 
 export async function updateUserRole(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const updated = await usersService.updateUserRole(param(req, 'id'), req.body as UpdateUserRoleDto)
+    const updated = await usersService.updateUserRole(param(req, 'id'), req.body as UpdateUserRoleDto, req.user!.id)
     ok(res, updated, 'Role updated')
   } catch (err) {
     next(err)

@@ -31,6 +31,7 @@ export async function createNote(dto: CreateNoteDto, createdBy: string, callerRo
     `A note was added to a ${dto.entityType}.`,
     dto.entityType,
     dto.entityId,
+    createdBy,
   )
 
   return data
@@ -56,6 +57,7 @@ export async function updateNote(
     `A note on a ${data.entity_type as string} was updated.`,
     data.entity_type as string,
     data.entity_id as string,
+    updatedBy,
   )
 
   return data
@@ -66,10 +68,12 @@ export async function deleteNote(id: string, userId: string, isAdmin: boolean) {
     const { error, count } = await notesRepo.deleteByIdAdmin(id)
     if (error) throw AppError.internal('Failed to delete note', error)
     if (!count) throw AppError.notFound('Note')
+    void notificationsService.notifyAllAdmins('note_deleted', 'Note deleted', 'A note was deleted.', 'note', id, userId)
     return
   }
 
   const { error, count } = await notesRepo.deleteById(id, userId)
   if (error) throw AppError.internal('Failed to delete note', error)
   if (count === 0) throw AppError.forbidden('You can only delete your own notes')
+  void notificationsService.notifyAllAdmins('note_deleted', 'Note deleted', 'A note was deleted.', 'note', id, userId)
 }

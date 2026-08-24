@@ -8,7 +8,7 @@ import type { CreateInvoiceDto, UpdateInvoiceDto, ListInvoicesQuery } from './in
 // Fire-and-forget — notifications must never block the main operation.
 function notifyUser(
   userId:   string,
-  type:     'invoice_issued' | 'invoice_paid' | 'invoice_overdue',
+  type:     'invoice_issued' | 'invoice_paid' | 'invoice_overdue' | 'invoice_deleted',
   title:    string,
   body:     string,
   entityId: string,
@@ -130,6 +130,7 @@ export async function createInvoice(dto: CreateInvoiceDto, createdBy: string) {
       `Invoice ${invoiceNumber} was issued to a corporate.`,
       'invoice',
       invoice.id,
+      createdBy,
     )
   }
 
@@ -142,6 +143,7 @@ export async function updateInvoice(
   dto: UpdateInvoiceDto,
   callerRole: string,
   callerAccountId?: string | null,
+  callerId?: string,
 ) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Invoice')
@@ -194,8 +196,8 @@ export async function updateInvoice(
     if (itemsError) throw AppError.internal('Failed to save invoice items', itemsError)
   }
 
+  const invoiceNumber = updated.invoice_number as string
   if (dto.status !== undefined && dto.status !== existing.status) {
-    const invoiceNumber = updated.invoice_number as string
     if (dto.status === 'unpaid') {
       notifyUser(existing.profile_id as string, 'invoice_issued', 'New invoice issued', `Invoice ${invoiceNumber} is ready.`, id)
     } else if (dto.status === 'paid') {
@@ -204,6 +206,9 @@ export async function updateInvoice(
       notifyUser(existing.profile_id as string, 'invoice_overdue', 'Invoice overdue', `Invoice ${invoiceNumber} is now overdue.`, id)
     }
   }
+  // Leadership hears about every invoice edit, not just a status flip —
+  // a corrected total/line-item/due-date is worth knowing about too.
+  void notificationsService.notifyAllAdmins('invoice_issued', 'Invoice updated', `Invoice ${invoiceNumber} was updated.`, 'invoice', id, callerId)
 
   const { data: full } = await repo.findById(id)
   return full
@@ -213,6 +218,7 @@ export async function deleteInvoice(
   id: string,
   callerRole: string,
   callerAccountId?: string | null,
+  callerId?: string,
 ) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Invoice')
@@ -229,6 +235,12 @@ export async function deleteInvoice(
 
   const { error } = await repo.softDelete(id)
   if (error) throw AppError.internal('Failed to delete invoice', error)
+
+  const invoiceNumber = existing.invoice_number as string
+  if (existing.profile_id && existing.profile_id !== callerId) {
+    notifyUser(existing.profile_id as string, 'invoice_deleted', 'Invoice deleted', `Invoice ${invoiceNumber} was deleted.`, id)
+  }
+  void notificationsService.notifyAllAdmins('invoice_deleted', 'Invoice deleted', `Invoice ${invoiceNumber} was deleted.`, 'invoice', id, callerId)
 }
 
 export async function duplicateInvoice(id: string, createdBy: string) {

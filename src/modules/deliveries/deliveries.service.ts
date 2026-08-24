@@ -13,6 +13,7 @@ import {
   type CreateDeliveryDto,
   type UpdateDeliveryDto,
   type UpdateDeliveryStatusDto,
+  type UpdateEtaDto,
   type DeleteDeliveryDto,
   type AssignEmployeesDto,
   type ListDeliveriesQuery,
@@ -27,7 +28,7 @@ function cast<T>(record: unknown): T {
 // Fire-and-forget — notifications must never block the main operation.
 function notifyUser(
   userId:   string,
-  type:     'shipment_created' | 'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled',
+  type:     'shipment_created' | 'shipment_updated' | 'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled' | 'shipment_eta_updated' | 'shipment_deleted',
   title:    string,
   body:     string,
   entityId: string,
@@ -229,6 +230,16 @@ export async function createDelivery(
     }
   }
 
+  const loadNumber = (data as DeliveryRow).load_number as string | undefined
+  void notificationsService.notifyAllAdmins(
+    'shipment_created',
+    'New delivery created',
+    `Delivery ${loadNumber ?? (data as DeliveryRow).shipment_id} was created.`,
+    'delivery',
+    (data as DeliveryRow).shipment_id as string,
+    createdBy,
+  )
+
   return data
 }
 
@@ -295,6 +306,16 @@ export async function updateDelivery(
 
   const { data, error } = await deliveriesRepo.updateById(id, updates)
   if (error || !data) throw AppError.internal('Failed to update delivery', error)
+
+  if (Object.keys(updates).length > 0) {
+    const loadNumber = (data.load_number as string | undefined) ?? id
+    const creatorId  = data.created_by as string | undefined
+    if (creatorId && creatorId !== userId) {
+      notifyUser(creatorId, 'shipment_updated', 'Delivery updated', `Delivery ${loadNumber} was updated.`, id)
+    }
+    void notificationsService.notifyAllAdmins('shipment_updated', 'Delivery updated', `Delivery ${loadNumber} was updated.`, 'delivery', id, userId)
+  }
+
   return data
 }
 
@@ -327,10 +348,13 @@ export async function updateStatus(
   const { data, error } = await deliveriesRepo.updateById(id, updates)
   if (error || !data) throw AppError.internal('Failed to update status', error)
 
-  // Residential Rewards Credit program — $1 per completed delivery, capped by
-  // rewards_rules.max_balance. Fire-and-forget: never blocks the status update.
+  // Residential Rewards Member program — 1 point per $1 spent (migration
+  // 068). Fire-and-forget: never blocks the status update.
   if (dto.status === 'delivered' && delivery.customer_id) {
-    void rewardsCreditService.earnCreditForDelivery(delivery.customer_id as string, id)
+    const amountSpent = ((data as DeliveryRow).confirmed_price as number | null)
+      ?? ((data as DeliveryRow).quoted_price as number | null)
+      ?? 0
+    void rewardsCreditService.earnPointsForDelivery(delivery.customer_id as string, id, amountSpent)
   }
 
   if (dto.reason || userId !== (delivery.created_by as string)) {
@@ -359,15 +383,49 @@ export async function updateStatus(
 
   const statusMsg = STATUS_MESSAGES[dto.status]
   if (statusMsg) {
-    notifyUser(creatorId, statusMsg.type, statusMsg.title, statusMsg.corporateBody, id)
-    // Corporate/employee-initiated status changes also alert platform admins;
-    // an admin performing the change already knows, so skip the self-alert.
-    if (!isAdmin) {
-      void notificationsService.notifyAllAdmins(statusMsg.type, statusMsg.title, statusMsg.adminBody, 'delivery', id)
+    if (creatorId !== userId) {
+      notifyUser(creatorId, statusMsg.type, statusMsg.title, statusMsg.corporateBody, id)
     }
+    // Leadership always hears about a status change, including ones an
+    // admin made — excludeUserId just skips notifying that same admin
+    // about their own action, not the whole admin audience.
+    void notificationsService.notifyAllAdmins(statusMsg.type, statusMsg.title, statusMsg.adminBody, 'delivery', id, userId)
   }
 
   return data
+}
+
+// ── ETA (standalone) ─────────────────────────────────────────────────────────
+// Any internal (Logical Links) user can set/clear the ops ETA without the
+// broader 'deliveries.edit' permission a full edit requires — same spirit as
+// the Status and Assign actions living outside the edit form. Route-level
+// requireAdmin (deliveries.routes.ts) is the actual customer-exclusion gate.
+export async function updateEta(id: string, dto: UpdateEtaDto, updatedBy: string) {
+  const { data, error } = await deliveriesRepo.updateById(id, {
+    estimated_delivery_date: dto.estimatedDeliveryDate,
+  })
+  if (error || !data) throw AppError.internal('Failed to update ETA', error)
+
+  const loadNumber = (data.load_number as string | undefined) ?? id
+  const creatorId  = data.created_by as string | undefined
+  if (creatorId && creatorId !== updatedBy) {
+    notifyUser(creatorId, 'shipment_eta_updated', 'Delivery ETA updated', `The estimated delivery date for ${loadNumber} was updated.`, id)
+  }
+  void notificationsService.notifyAllAdmins('shipment_eta_updated', 'Delivery ETA updated', `ETA for delivery ${loadNumber} was updated.`, 'delivery', id, updatedBy)
+
+  return data
+}
+
+// ── Assignable employees (lean roster for the Assign picker) ───────────────────
+// Deliberately separate from admin-employees' listAdminEmployees(), which is
+// gated behind 'employees.view' (HR access) and does an auth.users lookup per
+// row for email — overkill for "who can I assign this delivery to", and would
+// leave anyone with only 'deliveries.assign' (e.g. Manager) unable to fetch a
+// roster at all despite being allowed to assign.
+export async function listAssignableEmployees() {
+  const { data, error } = await deliveriesRepo.findAssignableEmployees()
+  if (error) throw AppError.internal('Failed to fetch assignable employees', error)
+  return data ?? []
 }
 
 // ── Assign to Employees (Logical Links staff only) ─────────────────────────────
@@ -439,4 +497,11 @@ export async function deleteDelivery(
   if (historyError) {
     logger.error('Delivery deleted but failed to write audit history entry', { deliveryId: id, error: historyError.message })
   }
+
+  const loadNumber = (delivery.load_number as string | undefined) ?? id
+  const creatorId  = delivery.created_by as string | undefined
+  if (creatorId && creatorId !== userId) {
+    notifyUser(creatorId, 'shipment_deleted', 'Delivery deleted', `Delivery ${loadNumber} was deleted.`, id)
+  }
+  void notificationsService.notifyAllAdmins('shipment_deleted', 'Delivery deleted', `Delivery ${loadNumber} was deleted: ${dto.reason}`, 'delivery', id, userId)
 }

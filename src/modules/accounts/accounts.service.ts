@@ -87,6 +87,7 @@ export async function createAccount(dto: CreateAccountDto, createdBy: string) {
     `Account "${data.account_name as string}" was created.`,
     'account',
     data.account_id as string,
+    createdBy,
   )
 
   return data
@@ -137,13 +138,22 @@ export async function updateCompanyLogo(accountId: string, dto: UpdateCompanyLog
     updated_at: new Date().toISOString(),
   })
   if (error || !data) throw AppError.internal('Failed to update company logo', error)
+
+  void notificationsService.notifyAllAdmins('account_updated', 'Company logo updated', `Logo for "${data.account_name as string}" was updated.`, 'account', accountId)
+
   return data
 }
 
 export async function deactivateAccount(id: string) {
-  await getAccount(id)
+  const account = await getAccount(id)
   const { error } = await accountsRepo.softDeleteById(id)
   if (error) throw AppError.internal('Failed to deactivate account', error)
+
+  void notificationsService.notifyAllAdmins('account_updated', 'Account deactivated', `Account "${account.account_name as string}" was deactivated.`, 'account', id)
+  const companyAdminId = await findCompanyAdminId(id)
+  if (companyAdminId) {
+    notifyUser(companyAdminId, 'account_updated', 'Your account was deactivated', 'Your company account was deactivated by an administrator.', id)
+  }
 }
 
 // ── Admin: Account Notes ──────────────────────────────────────────────────────
@@ -191,7 +201,7 @@ export async function createAccountNote(
 
   if (error || !data) throw AppError.internal('Failed to create note', error)
 
-  void notificationsService.notifyAllAdmins('account_note_created', 'Account note added', 'A note was added to a corporate account.', 'account', accountId)
+  void notificationsService.notifyAllAdmins('account_note_created', 'Account note added', 'A note was added to a corporate account.', 'account', accountId, createdBy)
   if (!dto.isInternal) {
     const companyAdminId = await findCompanyAdminId(accountId)
     if (companyAdminId) {
@@ -214,7 +224,7 @@ export async function updateAccountNote(
   const { data, error } = await accountsRepo.updateNoteById(noteId, dto.content, updatedBy)
   if (error || !data) throw AppError.internal('Failed to update note', error)
 
-  void notificationsService.notifyAllAdmins('account_note_updated', 'Account note updated', 'A note on a corporate account was updated.', 'account', accountId)
+  void notificationsService.notifyAllAdmins('account_note_updated', 'Account note updated', 'A note on a corporate account was updated.', 'account', accountId, updatedBy)
   if (!existing.is_internal) {
     const companyAdminId = await findCompanyAdminId(accountId)
     if (companyAdminId) {
@@ -231,6 +241,8 @@ export async function deleteAccountNote(accountId: string, noteId: string) {
 
   const { error } = await accountsRepo.softDeleteNoteById(noteId)
   if (error) throw AppError.internal('Failed to delete note', error)
+
+  void notificationsService.notifyAllAdmins('account_note_updated', 'Account note deleted', 'A note on a corporate account was deleted.', 'account', accountId)
 }
 
 // ── Corporate: own account (company) ───────────────────────────────────────────
@@ -326,4 +338,6 @@ export async function removeLogo(accountId: string) {
     updated_at: new Date().toISOString(),
   })
   if (error) throw AppError.internal('Failed to clear company logo', error)
+
+  void notificationsService.notifyAllAdmins('account_updated', 'Company logo removed', 'A corporate removed their own company logo.', 'account', accountId)
 }

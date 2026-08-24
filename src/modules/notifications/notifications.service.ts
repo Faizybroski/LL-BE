@@ -48,18 +48,33 @@ export async function markAllRead(userId: string) {
   if (error) throw AppError.internal('Failed to mark notifications as read', error)
 }
 
-// ── Corporate-initiated actions → platform admins ────────────────────────────────
+// ── Any mutating action → platform leadership ───────────────────────────────────
 // Fire-and-forget, same convention as every module-local `notifyUser` helper —
 // notifications must never block the caller's main operation.
+//
+// Deliberately CEO/VP/Manager only, not every admin_role (Assistant/Driver/etc
+// would just be noise for things they can't act on) — and never the actor
+// themselves (pass excludeUserId so someone doesn't get notified about their
+// own change).
+const ADMIN_NOTIFY_ROLES = ['ceo', 'vp', 'manager']
+
 export async function notifyAllAdmins(
   type: NotificationType,
   title: string,
   body: string,
   entityType: string,
   entityId: string,
+  excludeUserId?: string,
 ): Promise<void> {
   try {
-    const { data: admins } = await supabase.from('profiles').select('id').eq('role', 'admin').eq('is_active', true)
+    let query = supabase
+      .from('profiles')
+      .select('id')
+      .eq('role', 'admin')
+      .eq('is_active', true)
+      .in('admin_role', ADMIN_NOTIFY_ROLES)
+    if (excludeUserId) query = query.neq('id', excludeUserId)
+    const { data: admins } = await query
     if (!admins || admins.length === 0) return
 
     await notificationsRepo.createMany(

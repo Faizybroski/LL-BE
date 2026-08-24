@@ -4,4 +4,5 @@ import * as controller from './rewards-credit.controller'
 
 export const rewardsCreditRouter = Router()
 
-rewardsCreditRouter.get('/balance', authMiddleware, controller.getMyBalance)
+rewardsCreditRouter.get('/summary', authMiddleware, controller.getMySummary)
+rewardsCreditRouter.get('/history', authMiddleware, controller.getMyHistory)

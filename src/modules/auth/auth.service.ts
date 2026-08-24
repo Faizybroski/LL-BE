@@ -1,4 +1,4 @@
-import { supabase } from '../../services/supabase.service'
+import { supabase, createAuthVerificationClient } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import { env } from '../../lib/env'
 import { signAccessToken, signMfaChallengeToken, verifyMfaChallengeToken } from '../../lib/jwt'
@@ -99,7 +99,10 @@ export async function login(
   // This is equivalent to calling bcrypt.compare() ourselves — Supabase GoTrue
   // stores passwords as bcrypt hashes. We delegate credential verification
   // rather than duplicating it.
-  const { data, error } = await supabase.auth.signInWithPassword({
+  // MUST use a throwaway client, not the shared `supabase` singleton — see
+  // createAuthVerificationClient's comment for why signing in on the
+  // singleton poisons every other request on this process.
+  const { data, error } = await createAuthVerificationClient().auth.signInWithPassword({
     email: dto.email,
     password: dto.password,
   })
@@ -238,7 +241,8 @@ export async function disableMfaForUser(userId: string, dto: MfaDisableDto) {
   const { data: authUser } = await supabase.auth.admin.getUserById(userId)
   if (!authUser.user?.email) throw AppError.notFound('User')
 
-  const { error: verifyError } = await supabase.auth.signInWithPassword({
+  // Throwaway client — see createAuthVerificationClient's comment.
+  const { error: verifyError } = await createAuthVerificationClient().auth.signInWithPassword({
     email: authUser.user.email,
     password: dto.password,
   })
@@ -606,7 +610,8 @@ export async function changePassword(userId: string, dto: ChangePasswordDto) {
   const { data: authUser } = await supabase.auth.admin.getUserById(userId)
   if (!authUser.user?.email) throw AppError.notFound('User')
 
-  const { error: verifyError } = await supabase.auth.signInWithPassword({
+  // Throwaway client — see createAuthVerificationClient's comment.
+  const { error: verifyError } = await createAuthVerificationClient().auth.signInWithPassword({
     email: authUser.user.email,
     password: dto.currentPassword,
   })

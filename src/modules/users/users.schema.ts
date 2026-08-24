@@ -4,6 +4,8 @@ export const updateProfileSchema = z.object({
   fullName: z.string().min(2).optional(),
   phone: z.string().optional(),
   avatarUrl: z.string().url().optional(),
+  // YYYY-MM-DD — used only for the residential Rewards birthday bonus.
+  dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Invalid date').optional(),
 })
 
 export const listUsersQuerySchema = z.object({

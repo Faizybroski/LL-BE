@@ -60,7 +60,7 @@ export async function update(req: Request, res: Response, next: NextFunction): P
 
 export async function remove(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    await service.deleteCase(param(req, 'id'), req.user!.role)
+    await service.deleteCase(param(req, 'id'), req.user!.role, req.user!.id)
     noContent(res)
   } catch (err) {
     next(err)

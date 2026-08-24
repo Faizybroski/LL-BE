@@ -18,6 +18,7 @@ function formatProfile(row: Record<string, unknown>, email?: string) {
     avatarUrl:   (row.avatar_url as string | null) ?? null,
     accountId:   (row.account_id as string | null) ?? null,
     isApproved:  (row.is_approved as boolean) ?? false,
+    dateOfBirth: (row.date_of_birth as string | null) ?? null,
     createdAt:   row.created_at as string,
   }
 }
@@ -33,16 +34,41 @@ export async function getProfile(id: string) {
 }
 
 export async function updateProfile(id: string, dto: UpdateProfileDto) {
+  if (dto.dateOfBirth !== undefined) {
+    assertDateOfBirthValid(dto.dateOfBirth)
+  }
+
   const { data, error } = await usersRepo.updateById(id, {
     ...(dto.fullName !== undefined && { full_name: dto.fullName }),
     ...(dto.phone    !== undefined && { phone: dto.phone }),
     ...(dto.avatarUrl !== undefined && { avatar_url: dto.avatarUrl }),
+    ...(dto.dateOfBirth !== undefined && { date_of_birth: dto.dateOfBirth }),
     updated_at: new Date().toISOString(),
   })
   if (error || !data) throw AppError.notFound('User')
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)
   return formatProfile(data as Record<string, unknown>, authUser.user?.email)
+}
+
+// Deliberately NOT locked after first save — a customer who fat-fingers
+// their birthday needs to be able to fix it. The Rewards birthday bonus
+// this field drives is guarded on the EARN side instead (rewards-credit.
+// service.ts enforces a rolling 365-day cooldown per profile, independent
+// of what date_of_birth says), so freely editable here can't be used to
+// farm the bonus — changing your birthday only moves *when* in the year
+// you're next eligible, never *how often*.
+// Still worth rejecting obviously-fake values, unrelated to that gate.
+function assertDateOfBirthValid(next: string): void {
+  const dob = new Date(`${next}T00:00:00.000Z`)
+  const now = new Date()
+  if (dob.getTime() > now.getTime()) {
+    throw AppError.badRequest('Date of birth cannot be in the future')
+  }
+  const age = (now.getTime() - dob.getTime()) / (365.25 * 86_400_000)
+  if (age > 120) {
+    throw AppError.badRequest('Date of birth is not valid')
+  }
 }
 
 export async function listUsers(query: ListUsersQuery) {
@@ -69,7 +95,7 @@ export async function listUsers(query: ListUsersQuery) {
   return { users, total: count ?? 0 }
 }
 
-export async function updateUserRole(id: string, dto: UpdateUserRoleDto) {
+export async function updateUserRole(id: string, dto: UpdateUserRoleDto, changedBy?: string) {
   // Clear the role-specific sub-fields on every flip. Without this, an admin
   // demoted to corporate and later re-promoted to admin would silently regain
   // their old admin_role (e.g. 'ceo') and its permissions without anyone
@@ -84,6 +110,20 @@ export async function updateUserRole(id: string, dto: UpdateUserRoleDto) {
 
   const { data, error } = await usersRepo.updateById(id, updates)
   if (error || !data) throw AppError.notFound('User')
+
+  if (id !== changedBy) {
+    void notificationsService
+      .createNotification({
+        userId:     id,
+        type:       'user_role_updated',
+        title:      'Your role was changed',
+        body:       `Your account role was changed to "${dto.role}".`,
+        entityType: 'account',
+        entityId:   id,
+      })
+      .catch(() => undefined)
+  }
+  void notificationsService.notifyAllAdmins('user_role_updated', 'User role changed', `A user's role was changed to "${dto.role}".`, 'account', id, changedBy)
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)
   return formatProfile(data as Record<string, unknown>, authUser.user?.email)

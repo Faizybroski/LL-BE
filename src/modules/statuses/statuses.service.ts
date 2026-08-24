@@ -105,4 +105,12 @@ export async function deleteStatus(id: string) {
 
   const { error } = await statusesRepo.softDeleteById(id)
   if (error) throw AppError.internal('Failed to delete status', error)
+
+  void notificationsService.notifyAllAdmins(
+    'status_deleted',
+    'Status deleted',
+    `Status "${existing.name as string}" was deleted.`,
+    'status',
+    id,
+  )
 }

@@ -229,6 +229,22 @@ export async function insertStatusHistoryEntry(entry: {
   })
 }
 
+// Lean roster for the assignment picker — anyone with 'deliveries.assign' can
+// call this even without 'employees.view' (HR access), so it deliberately
+// stays minimal: no email/phone, no auth.users lookups. Every active
+// internal employee is eligible, not filtered by admin_role — a delivery
+// can be assigned to any mix (driver, dispatcher, assistant, etc.), not just
+// a fixed set of "assignable" roles.
+export async function findAssignableEmployees() {
+  return supabase
+    .from('profiles')
+    .select('id, full_name, avatar_url, admin_role')
+    .eq('role', 'admin')
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .order('full_name', { ascending: true })
+}
+
 // ── Assignments (many-to-many: a delivery can have several staff on it at once) ─
 export async function findAssignedDeliveryIds(employeeId: string): Promise<string[]> {
   const { data } = await supabase

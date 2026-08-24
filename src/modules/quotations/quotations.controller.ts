@@ -110,6 +110,7 @@ export async function update(req: Request, res: Response, next: NextFunction): P
       req.body as UpdateQuotationDto,
       req.user!.role,
       req.user!.accountId,
+      req.user!.id,
     )
     ok(res, quotation, 'Quotation updated')
   } catch (err) {
@@ -123,6 +124,7 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
       param(req, 'id'),
       req.user!.role,
       req.user!.accountId,
+      req.user!.id,
     )
     noContent(res)
   } catch (err) {

@@ -128,3 +128,27 @@ export const supabase = createClient(
     },
   }
 )
+
+// ROOT CAUSE (found via the RLS-violation investigation, see git history):
+// `persistSession: false` above only stops supabase-js writing the session to
+// storage — it does NOT stop the client caching a signed-in session in
+// memory. Any `supabase.auth.signInWithPassword(...)` / other sign-in call
+// makes that client start sending the SIGNED-IN USER's access token on every
+// subsequent `.from()` request instead of the service-role key, because
+// `supabase` above is a module-level singleton shared by the whole process.
+// One user logging in would silently downgrade every other in-flight and
+// future request on that process to that user's own (usually
+// policy-starved) RLS scope — surfacing as unrelated "new row violates
+// row-level security policy" errors on completely different tables, only
+// clearing on a process restart. auth.service.ts's password-verification
+// calls (login, MFA disable, change-password) MUST use this throwaway
+// client — never the shared `supabase` singleton above — so a sign-in can
+// never contaminate the rest of the app's requests.
+export function createAuthVerificationClient() {
+  return createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  })
+}

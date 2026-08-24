@@ -85,4 +85,12 @@ export async function deleteLocation(id: string) {
 
   const { error } = await locationsRepo.softDeleteById(id)
   if (error) throw AppError.internal('Failed to delete location', error)
+
+  void notificationsService.notifyAllAdmins(
+    'location_deleted',
+    'Location deleted',
+    `Location "${existing.city as string}, ${existing.province as string}" was deleted.`,
+    'location',
+    id,
+  )
 }

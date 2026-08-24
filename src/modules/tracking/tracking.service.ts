@@ -174,10 +174,9 @@ export async function createEvent(
     }
   }
 
-  // Notify platform admins if a corporate/employee created this event
-  if (!isAdmin) {
-    void notificationsService.notifyAllAdmins('tracking_event_created', title, body, 'delivery', dto.loadId)
-  }
+  // Leadership hears about every tracking event, admin-created ones
+  // included — excludeUserId just skips the actor's own notification.
+  void notificationsService.notifyAllAdmins('tracking_event_created', title, body, 'delivery', dto.loadId, userId)
 
   return data
 }
@@ -217,15 +216,14 @@ export async function updateEvent(
   const { data, error } = await trackingRepo.updateById(id, updates)
   if (error || !data) throw AppError.internal('Failed to update tracking event', error)
 
-  if (!isAdmin) {
-    void notificationsService.notifyAllAdmins(
-      'tracking_event_updated',
-      'Tracking event updated',
-      'A corporate updated a tracking event.',
-      'delivery',
-      event.load_id as string,
-    )
-  }
+  void notificationsService.notifyAllAdmins(
+    'tracking_event_updated',
+    'Tracking event updated',
+    isAdmin ? 'A tracking event was updated.' : 'A corporate updated a tracking event.',
+    'delivery',
+    event.load_id as string,
+    userId,
+  )
 
   return data
 }
@@ -255,13 +253,12 @@ export async function deleteEvent(
   const { error } = await trackingRepo.deleteById(id)
   if (error) throw AppError.internal('Failed to delete tracking event', error)
 
-  if (!isAdmin) {
-    void notificationsService.notifyAllAdmins(
-      'tracking_event_deleted',
-      'Tracking event deleted',
-      'A corporate deleted a tracking event.',
-      'delivery',
-      event.load_id as string,
-    )
-  }
+  void notificationsService.notifyAllAdmins(
+    'tracking_event_deleted',
+    'Tracking event deleted',
+    isAdmin ? 'A tracking event was deleted.' : 'A corporate deleted a tracking event.',
+    'delivery',
+    event.load_id as string,
+    userId,
+  )
 }

@@ -20,7 +20,7 @@ const BUCKET = 'support-attachments'
 // Fire-and-forget — notifications must never block the main operation.
 function notifyUser(
   userId: string,
-  type: 'support_case_replied' | 'support_case_status_changed',
+  type: 'support_case_created' | 'support_case_updated' | 'support_case_replied' | 'support_case_status_changed' | 'support_case_deleted',
   title: string,
   body: string,
   entityId: string,
@@ -142,6 +142,15 @@ export async function createCase(dto: CreateCaseDto, createdBy: string, callerRo
 
   await repo.createEvent({ case_id: caseRow.case_id, event_type: 'created', created_by: createdBy })
 
+  void notificationsService.notifyAllAdmins(
+    'support_case_created',
+    'New support case',
+    `Case ${caseRow.case_number as string} was opened: "${dto.subject}".`,
+    'support_case',
+    caseRow.case_id as string,
+    createdBy,
+  )
+
   return caseRow
 }
 
@@ -199,11 +208,18 @@ export async function updateCase(
 
   const { data: updated, error } = await repo.update(id, patch)
   if (error || !updated) throw AppError.internal('Failed to update support case', error)
+
+  if (callerRole === 'admin' && existing.created_by !== callerId) {
+    notifyUser(existing.created_by as string, 'support_case_updated', 'Your support case was updated', `Case ${existing.case_number} was updated by support.`, id)
+  } else if (callerRole !== 'admin') {
+    void notificationsService.notifyAllAdmins('support_case_updated', 'Support case updated', `Case ${existing.case_number} was updated by the customer.`, 'support_case', id, callerId)
+  }
+
   return updated
 }
 
 // Admin-only — complete management includes removing cases entirely.
-export async function deleteCase(id: string, callerRole: string) {
+export async function deleteCase(id: string, callerRole: string, callerId: string) {
   if (callerRole !== 'admin') throw AppError.forbidden('Only support staff can delete cases')
 
   const { data: existing, error: findErr } = await repo.findById(id)
@@ -211,6 +227,11 @@ export async function deleteCase(id: string, callerRole: string) {
 
   const { error } = await repo.softDelete(id)
   if (error) throw AppError.internal('Failed to delete support case', error)
+
+  if (existing.created_by !== callerId) {
+    notifyUser(existing.created_by as string, 'support_case_deleted', 'Support case deleted', `Case ${existing.case_number} was deleted.`, id)
+  }
+  void notificationsService.notifyAllAdmins('support_case_deleted', 'Support case deleted', `Case ${existing.case_number} was deleted.`, 'support_case', id, callerId)
 }
 
 // ── Comments ──────────────────────────────────────────────────────────────────
@@ -245,6 +266,7 @@ export async function addComment(
       `A customer replied on case ${existing.case_number}.`,
       'support_case',
       id,
+      callerId,
     )
   }
 

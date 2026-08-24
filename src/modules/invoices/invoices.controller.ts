@@ -48,6 +48,7 @@ export async function update(req: Request, res: Response, next: NextFunction): P
       req.body as UpdateInvoiceDto,
       req.user!.role,
       req.user!.accountId,
+      req.user!.id,
     )
     ok(res, invoice, 'Invoice updated')
   } catch (err) {
@@ -61,6 +62,7 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
       param(req, 'id'),
       req.user!.role,
       req.user!.accountId,
+      req.user!.id,
     )
     noContent(res)
   } catch (err) {

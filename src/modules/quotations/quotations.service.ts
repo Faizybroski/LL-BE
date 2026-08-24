@@ -20,7 +20,7 @@ import type {
 // Fire-and-forget — notifications must never block the main operation.
 function notifyUser(
   userId:   string,
-  type:     'quotation_sent' | 'quotation_accepted' | 'quotation_rejected',
+  type:     'quotation_sent' | 'quotation_updated' | 'quotation_accepted' | 'quotation_rejected' | 'quotation_deleted',
   title:    string,
   body:     string,
   entityId: string,
@@ -173,6 +173,7 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
       `Quotation ${quotationNumber} was sent to a corporate.`,
       'quotation',
       quotation.id,
+      createdBy,
     )
   }
 
@@ -393,6 +394,7 @@ export async function updateQuotation(
   dto: UpdateQuotationDto,
   callerRole: string,
   callerAccountId?: string | null,
+  callerId?: string,
 ) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Quotation')
@@ -482,12 +484,18 @@ export async function updateQuotation(
     if (itemsError) throw AppError.internal('Failed to save quotation items', itemsError)
   }
 
+  const quotationNumber = updated.quotation_number as string
+
   // Only Draft → Sent is reachable here (see guard above) — Accepted/Rejected
   // notifications are fired from acceptQuotation/declineQuotation instead.
   if (dto.status === 'sent' && dto.status !== existing.status) {
-    const quotationNumber = updated.quotation_number as string
     notifyUser(existing.profile_id as string, 'quotation_sent', 'New quotation received', `Quotation ${quotationNumber} is ready for review.`, id)
+  } else {
+    // A non-status edit (pricing, items, addresses, etc.) — worth telling
+    // the customer their quotation changed, and leadership either way.
+    notifyUser(existing.profile_id as string, 'quotation_updated', 'Your quotation was updated', `Quotation ${quotationNumber} was updated.`, id)
   }
+  void notificationsService.notifyAllAdmins('quotation_updated', 'Quotation updated', `Quotation ${quotationNumber} was updated.`, 'quotation', id, callerId)
 
   const { data: full } = await repo.findById(id)
   return full
@@ -708,6 +716,7 @@ export async function deleteQuotation(
   id: string,
   callerRole: string,
   callerAccountId?: string | null,
+  callerId?: string,
 ) {
   const { data: existing } = await repo.findById(id)
   if (!existing) throw AppError.notFound('Quotation')
@@ -725,6 +734,12 @@ export async function deleteQuotation(
 
   const { error } = await repo.softDelete(id)
   if (error) throw AppError.internal('Failed to delete quotation', error)
+
+  const quotationNumber = existing.quotation_number as string
+  if (existing.profile_id && existing.profile_id !== callerId) {
+    notifyUser(existing.profile_id as string, 'quotation_deleted', 'Quotation deleted', `Quotation ${quotationNumber} was deleted.`, id)
+  }
+  void notificationsService.notifyAllAdmins('quotation_deleted', 'Quotation deleted', `Quotation ${quotationNumber} was deleted.`, 'quotation', id, callerId)
 }
 
 export async function duplicateQuotation(id: string, createdBy: string) {
@@ -798,20 +813,28 @@ export async function applyRewardsCredit(id: string, callerId: string, callerRol
     throw AppError.conflict('Rewards Credit has already been applied to this quotation')
   }
 
-  const { applied, newBalance } = await rewardsCreditService.redeemCreditForQuotation(
+  const { appliedDollars, appliedPoints, newBalance } = await rewardsCreditService.redeemPointsForQuotation(
     callerId,
     id,
     Number(quotation.total),
   )
 
-  if (applied === 0) {
-    return { quotation, applied, remainingBalance: newBalance }
+  if (appliedDollars === 0) {
+    return { quotation, applied: 0, appliedPoints: 0, remainingBalance: newBalance }
   }
 
-  const { data: updated, error } = await repo.update(id, { rewards_credit_applied: applied })
-  if (error) throw AppError.internal('Failed to record Rewards Credit on quotation', error)
+  const { data: updated, error } = await repo.update(id, { rewards_credit_applied: appliedDollars })
+  if (error) throw AppError.internal('Failed to record Rewards points on quotation', error)
 
-  return { quotation: updated, applied, remainingBalance: newBalance }
+  void notificationsService.notifyAllAdmins(
+    'quotation_updated',
+    'Rewards points redeemed',
+    `${appliedPoints} points ($${appliedDollars.toFixed(2)}) were redeemed on quotation ${quotation.quotation_number as string}.`,
+    'quotation',
+    id,
+  )
+
+  return { quotation: updated, applied: appliedDollars, appliedPoints, remainingBalance: newBalance }
 }
 
 export async function generatePdf(

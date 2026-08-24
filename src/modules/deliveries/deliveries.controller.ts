@@ -6,6 +6,7 @@ import type {
   CreateDeliveryDto,
   UpdateDeliveryDto,
   UpdateDeliveryStatusDto,
+  UpdateEtaDto,
   DeleteDeliveryDto,
   AssignEmployeesDto,
   ListDeliveriesQuery,
@@ -87,6 +88,24 @@ export async function updateStatus(req: Request, res: Response, next: NextFuncti
       req.user!.companyRole,
     )
     ok(res, delivery, 'Status updated')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function listAssignableEmployees(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const employees = await deliveriesService.listAssignableEmployees()
+    ok(res, employees)
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function updateEta(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const delivery = await deliveriesService.updateEta(param(req, 'id'), req.body as UpdateEtaDto, req.user!.id)
+    ok(res, delivery, 'ETA updated')
   } catch (err) {
     next(err)
   }

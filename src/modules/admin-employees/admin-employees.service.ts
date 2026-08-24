@@ -106,6 +106,7 @@ export async function createAdminEmployee(requestingUser: RequestingUser, dto: C
     `${dto.fullName} was added as an internal (${dto.adminRole}) employee.`,
     'admin_employee',
     userId,
+    requestingUser.id,
   )
 
   return { ...profile, email: dto.email }
@@ -175,7 +176,22 @@ export async function updateAdminEmployee(requestingUser: RequestingUser, id: st
     `${data.full_name as string} (internal employee) was updated.`,
     'admin_employee',
     id,
+    requestingUser.id,
   )
+  // Tell the affected employee directly when it's their own role or active
+  // status that changed — not just the leadership audit trail above.
+  if (id !== requestingUser.id && (dto.adminRole !== undefined || dto.isActive !== undefined)) {
+    void notificationsService.createNotification({
+      userId: id,
+      type: 'admin_employee_updated',
+      title: dto.isActive === false ? 'Your account was deactivated' : 'Your role was updated',
+      body: dto.isActive === false
+        ? 'Your internal account was deactivated by an administrator.'
+        : `Your role was changed to "${dto.adminRole}".`,
+      entityType: 'admin_employee',
+      entityId: id,
+    }).catch(() => undefined)
+  }
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)
   return { ...data, email: authUser.user?.email ?? '' }

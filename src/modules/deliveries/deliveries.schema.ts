@@ -100,6 +100,14 @@ export const assignEmployeesSchema = z.object({
   employeeIds: z.array(z.string().uuid('Invalid employee user ID')).max(20),
 })
 
+// Standalone ETA update — any internal (Logical Links) user can set this
+// without needing the broader 'deliveries.edit' permission that a full
+// delivery edit requires. Distinct from preferredDeliveryDate (what the
+// customer asked for) — this is ops's own estimate.
+export const updateEtaSchema = z.object({
+  estimatedDeliveryDate: z.string().datetime({ offset: true }).nullable(),
+})
+
 export const deleteDeliverySchema = z.object({
   reason: z.string().min(3, 'Deletion reason required'),
 })
@@ -127,6 +135,7 @@ export const listDeliveriesSchema = z.object({
 export type CreateDeliveryDto       = z.infer<typeof createDeliverySchema>
 export type UpdateDeliveryDto       = z.infer<typeof updateDeliverySchema>
 export type UpdateDeliveryStatusDto = z.infer<typeof updateDeliveryStatusSchema>
+export type UpdateEtaDto            = z.infer<typeof updateEtaSchema>
 export type AssignEmployeesDto      = z.infer<typeof assignEmployeesSchema>
 export type DeleteDeliveryDto       = z.infer<typeof deleteDeliverySchema>
 export type ListDeliveriesQuery      = z.infer<typeof listDeliveriesSchema>
