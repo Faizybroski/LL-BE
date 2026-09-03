@@ -31,9 +31,17 @@ export const updateAccountSchema = createAccountSchema
     creditLimit:    z.number().min(0).optional(),
     paymentTerms:   z.number().int().min(0).optional(),
     isActive:       z.boolean().optional(),
+    businessType:   z.string().max(100).optional(),
+    industry:       z.string().max(100).optional(),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })
+
+// ── Reject a corporate account request ───────────────────────────────────────
+export const rejectAccountSchema = z.object({
+  reason: z.string().min(3).max(500),
+  note:   z.string().max(2000).optional(),
+})
 
 // ── Corporate: own company update (company_admin only, own account) ────────────
 // Deliberately excludes credit_limit/payment_terms/isActive — commercial terms
@@ -52,6 +60,8 @@ export const updateOwnCompanySchema = z.object({
   contactPhone:         z.string().optional(),
   billingEmail:         z.string().email().optional().or(z.literal('')),
   accountsPayableEmail: z.string().email().optional().or(z.literal('')),
+  businessType:         z.string().max(100).optional(),
+  industry:             z.string().max(100).optional(),
 })
   .partial()
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })
@@ -61,6 +71,7 @@ export const listAccountsQuerySchema = z.object({
   limit:     z.coerce.number().int().min(1).max(100).default(20),
   search:    z.string().optional(),
   isActive:  z.enum(['true', 'false']).optional(),
+  status:    z.enum(['active', 'rejected']).optional(),
   dateFrom:  z.string().max(30).optional(),
   dateTo:    z.string().max(30).optional(),
   sortBy:    z.enum(['account_name', 'is_active', 'created_at']).optional(),
@@ -93,6 +104,7 @@ export const updateCompanyLogoSchema = z.object({
 // ── DTO types ─────────────────────────────────────────────────────────────────
 export type CreateAccountDto      = z.infer<typeof createAccountSchema>
 export type UpdateAccountDto      = z.infer<typeof updateAccountSchema>
+export type RejectAccountDto      = z.infer<typeof rejectAccountSchema>
 export type ListAccountsQuery     = z.infer<typeof listAccountsQuerySchema>
 export type CreateAccountNoteDto  = z.infer<typeof createAccountNoteSchema>
 export type UpdateAccountNoteDto  = z.infer<typeof updateAccountNoteSchema>

@@ -5,6 +5,7 @@ import { validate } from '../../lib/validate'
 import {
   createAccountSchema,
   updateAccountSchema,
+  rejectAccountSchema,
   listAccountsQuerySchema,
   createAccountNoteSchema,
   updateAccountNoteSchema,
@@ -47,6 +48,10 @@ accountsRouter.patch(
   validate(updateOwnCompanySchema),
   accountsController.updateMyCompany,
 )
+
+// Own company dashboard data (identity page parity with the admin view)
+accountsRouter.get('/me/stats',    authMiddleware, accountsController.myStats)
+accountsRouter.get('/me/activity', authMiddleware, accountsController.myActivity)
 
 // ── Logo upload (signed-URL flow — bypasses storage RLS) ─────────────────────
 accountsRouter.post(
@@ -114,6 +119,48 @@ accountsRouter.delete(
   requireAdmin,
   requirePermission('customers.delete'),
   accountsController.remove,
+)
+
+// ── Admin: review lifecycle (reject / reconsider / purge) ────────────────────
+accountsRouter.post(
+  '/:id/reject',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('customers.delete'),
+  validate(rejectAccountSchema),
+  accountsController.reject,
+)
+
+accountsRouter.post(
+  '/:id/reconsider',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('customers.edit'),
+  accountsController.reconsider,
+)
+
+accountsRouter.post(
+  '/:id/purge',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('customers.delete'),
+  accountsController.purge,
+)
+
+accountsRouter.get(
+  '/:id/stats',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('customers.view'),
+  accountsController.stats,
+)
+
+accountsRouter.get(
+  '/:id/activity',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('customers.view'),
+  accountsController.activity,
 )
 
 // ── Admin: Account Notes ──────────────────────────────────────────────────────

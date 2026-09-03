@@ -285,6 +285,26 @@ export async function decideAutoQuote(
   if (dto.decision === 'accept') {
     await repo.update(quotationId, { accepted_at: nowIso })
 
+    // Residential rewards redemption — applied here, before the delivery is
+    // created, so the delivery's quoted price is the net amount owed. Capped
+    // at 50% of the total inside redeemPointsForQuotation. Best-effort: a
+    // rewards failure must not block the booking.
+    if (dto.applyRewards && callerRole === 'residential') {
+      try {
+        const { appliedDollars } = await rewardsCreditService.redeemPointsForQuotation(
+          callerId,
+          quotationId,
+          Number((created as { total: number }).total),
+        )
+        if (appliedDollars > 0) {
+          await repo.update(quotationId, { rewards_credit_applied: appliedDollars })
+          ;(created as Record<string, unknown>).rewards_credit_applied = appliedDollars
+        }
+      } catch {
+        /* rewards redemption is best-effort during auto-quote accept */
+      }
+    }
+
     const { fullName, companyName } = await acceptanceIdentity(callerId, callerAccountId)
     // A bare IPv4/IPv6 shape check — an empty string or garbled proxy header
     // would otherwise reach the ip_address INET column and fail the insert.
@@ -576,7 +596,9 @@ async function createDeliveryFromAcceptedQuotation(
     specialInstructions:  (quotation.notes as string | null) ?? undefined,
     isDangerousGoods:      false,
     requiresRefrigeration: false,
-    quotedPrice: Number(quotation.total) || undefined,
+    // Net of any rewards credit the customer redeemed against this quote —
+    // this is what they actually owe and get invoiced for.
+    quotedPrice: (Number(quotation.total) - Number(quotation.rewards_credit_applied ?? 0)) || undefined,
     currency:    (quotation.currency as string | null) ?? 'CAD',
     ...(callerRole === 'residential' ? { customerId: callerId } : {}),
   }
@@ -788,8 +810,10 @@ export async function duplicateQuotation(id: string, createdBy: string) {
 }
 
 // ── POST /:id/apply-rewards-credit ────────────────────────────────────────────
-// Residential-only. Applies min(balance, max_redemption% × total) as a credit
-// against this quotation, recorded on both the ledger and the quotation row.
+// Residential-only. Applies min(points value, 50% × total) as a credit against
+// this quotation (the customer always pays at least half in cash), recorded on
+// both the ledger and the quotation row. Cap enforced in
+// rewardsCreditService.redeemPointsForQuotation.
 export async function applyRewardsCredit(id: string, callerId: string, callerRole: string) {
   const { data: quotation } = await repo.findById(id)
   if (!quotation) throw AppError.notFound('Quotation')

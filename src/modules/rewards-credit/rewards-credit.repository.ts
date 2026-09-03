@@ -46,6 +46,10 @@ export async function findDateOfBirth(profileId: string) {
   return supabase.from('profiles').select('date_of_birth').eq('id', profileId).single()
 }
 
+export async function findProfileRole(profileId: string) {
+  return supabase.from('profiles').select('role').eq('id', profileId).maybeSingle()
+}
+
 // Most recent birthday_bonus award for this profile — the gate for the
 // rolling 365-day cooldown (migration 069). date_of_birth can be changed
 // freely; this is what actually stops repeat awards, not the DOB itself.

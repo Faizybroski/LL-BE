@@ -5,6 +5,7 @@ import { param } from '../../lib/params'
 import type {
   CreateAccountDto,
   UpdateAccountDto,
+  RejectAccountDto,
   ListAccountsQuery,
   CreateAccountNoteDto,
   UpdateAccountNoteDto,
@@ -52,6 +53,7 @@ export async function update(req: Request, res: Response, next: NextFunction): P
     const account = await accountsService.updateAccount(
       param(req, 'id'),
       req.body as UpdateAccountDto,
+      req.user!.id,
     )
     ok(res, account, 'Account updated')
   } catch (err) {
@@ -63,6 +65,71 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
   try {
     await accountsService.deactivateAccount(param(req, 'id'))
     noContent(res)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── Admin: review lifecycle ──────────────────────────────────────────────────
+export async function reject(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const account = await accountsService.rejectAccount(
+      param(req, 'id'),
+      req.body as RejectAccountDto,
+      req.user!.id,
+    )
+    ok(res, account, 'Account request rejected')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function reconsider(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const account = await accountsService.reconsiderAccount(param(req, 'id'), req.user!.id)
+    ok(res, account, 'Account request reopened')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function purge(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await accountsService.purgeAccount(param(req, 'id'), req.user!.id)
+    noContent(res)
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function stats(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    ok(res, await accountsService.getAccountStats(param(req, 'id')))
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function activity(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    ok(res, await accountsService.getAccountActivity(param(req, 'id'), true))
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── Corporate: own stats / activity ─────────────────────────────────────────
+export async function myStats(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    ok(res, await accountsService.getOwnAccountStats(req.user!.id))
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function myActivity(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    ok(res, await accountsService.getOwnAccountActivity(req.user!.id))
   } catch (err) {
     next(err)
   }

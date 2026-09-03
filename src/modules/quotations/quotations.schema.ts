@@ -157,6 +157,9 @@ export const decideAutoQuoteSchema = z.object({
   decision:     z.enum(['accept', 'decline']),
   termsVersion: z.string().min(1).optional(),
   acknowledged: z.boolean().optional(),
+  // Residential only: redeem rewards points toward this quote on accept
+  // (capped at 50% of the total — see rewardsCreditService).
+  applyRewards: z.boolean().optional(),
 }).refine(
   (dto) => dto.decision !== 'accept' || (!!dto.termsVersion && dto.acknowledged === true),
   { message: 'You must acknowledge the Terms & Conditions to accept', path: ['acknowledged'] },

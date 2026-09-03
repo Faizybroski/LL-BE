@@ -2,6 +2,8 @@ import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import * as usersRepo from './users.repository'
 import * as notificationsService from '../notifications/notifications.service'
+import * as accountsService from '../accounts/accounts.service'
+import * as accountsRepo from '../accounts/accounts.repository'
 import type { UpdateProfileDto, ListUsersQuery, UpdateUserRoleDto, ApproveUserDto } from './users.schema'
 
 // Maps a raw profiles row to the camelCase shape the frontend expects.
@@ -160,9 +162,29 @@ export async function removeAvatar(userId: string) {
   if (error) throw AppError.internal('Failed to clear avatar', error)
 }
 
-export async function approveUser(id: string, dto: ApproveUserDto) {
+export async function approveUser(id: string, dto: ApproveUserDto, adminId?: string) {
   const { data, error } = await usersRepo.updateById(id, { is_approved: dto.isApproved })
   if (error || !data) throw AppError.notFound('User')
+
+  const accountId = (data as Record<string, unknown>).account_id as string | null
+
+  // Mirror the review outcome onto the account + lifecycle feed so the
+  // corporate customer profile pages can show "Reviewed / Reviewed By" and an
+  // "approved" / revocation entry in the activity history.
+  if (accountId) {
+    void accountsRepo
+      .lifecycleUpdate(accountId, {
+        reviewed_at: new Date().toISOString(),
+        ...(adminId ? { reviewed_by: adminId } : {}),
+      })
+      .catch(() => undefined)
+    void accountsService.logAccountActivity({
+      accountId,
+      eventType:   dto.isApproved ? 'approved' : 'reviewed',
+      description:  dto.isApproved ? 'Account approved' : 'Approval revoked',
+      actorId:     adminId ?? null,
+    })
+  }
 
   if (dto.isApproved) {
     void notificationsService

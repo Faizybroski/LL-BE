@@ -1,10 +1,12 @@
 import { supabase } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import * as accountsRepo from './accounts.repository'
+import * as authRepo from '../auth/auth.repository'
 import * as notificationsService from '../notifications/notifications.service'
 import type {
   CreateAccountDto,
   UpdateAccountDto,
+  RejectAccountDto,
   ListAccountsQuery,
   CreateAccountNoteDto,
   UpdateAccountNoteDto,
@@ -13,6 +15,51 @@ import type {
   UpdateOwnCompanyDto,
 } from './accounts.schema'
 import type { NotificationType } from '../notifications/notifications.schema'
+
+const REJECTION_RETENTION_DAYS = 90
+
+// Both IDs shown on the profile pages are derived from the single
+// `account_code` sequence number (e.g. "ACC-2026-027" -> 27): the request is
+// "REQ-YYYY-NNNNN" while pending/rejected, the customer is "LLC-CORP-NNNNN"
+// once approved. Format is presentational only — one source of truth.
+function displayIds(row: Record<string, unknown>): { request_id: string; customer_id: string } {
+  const code = (row.account_code as string | null) ?? ''
+  const createdYear = new Date(row.created_at as string).getFullYear()
+  const m = /(\d{4})-0*(\d+)\s*$/.exec(code) ?? /0*(\d+)\s*$/.exec(code)
+  let year = createdYear
+  let num = 0
+  if (m) {
+    if (m.length === 3) { year = Number(m[1]); num = Number(m[2]) }
+    else { num = Number(m[1]) }
+  }
+  const padded = String(num).padStart(5, '0')
+  return { request_id: `REQ-${year}-${padded}`, customer_id: `LLC-CORP-${padded}` }
+}
+
+function withDisplayIds<T extends Record<string, unknown>>(row: T): T & { request_id: string; customer_id: string } {
+  return { ...row, ...displayIds(row) }
+}
+
+// "Shanika R. (CEO)" — actor label stored denormalized on each activity row.
+async function actorLabel(userId: string): Promise<string> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('full_name, admin_role')
+    .eq('id', userId)
+    .maybeSingle()
+  const name = (data?.full_name as string | null)?.trim() || 'Administrator'
+  const roleRaw = data?.admin_role as string | null
+  const role = roleRaw ? roleRaw.toUpperCase() : null
+  return role ? `${name} (${role})` : name
+}
+
+export async function logAccountActivity(input: accountsRepo.ActivityInput): Promise<void> {
+  try {
+    await accountsRepo.insertActivity(input)
+  } catch {
+    /* activity logging must never block the operation it records */
+  }
+}
 
 // Empty strings from the frontend (a cleared input) mean "clear this field".
 function blankToNull(value: string | undefined): string | null | undefined {
@@ -40,13 +87,15 @@ async function findCompanyAdminId(accountId: string): Promise<string | null> {
 export async function listAccounts(query: ListAccountsQuery) {
   const { data, count, error } = await accountsRepo.findAll(query)
   if (error) throw AppError.internal('Failed to fetch accounts', error)
-  return { accounts: data ?? [], total: count ?? 0 }
+  return { accounts: (data ?? []).map((r) => withDisplayIds(r as Record<string, unknown>)), total: count ?? 0 }
 }
 
-export async function getAccount(id: string) {
-  const { data, error } = await accountsRepo.findById(id)
+// Admin-only callers (routes are requireAdmin) — resolves rejected accounts too
+// so the detail page, notes and the reconsider flow keep working after reject.
+export async function getAccount(id: string, includeDeleted = true) {
+  const { data, error } = await accountsRepo.findById(id, includeDeleted)
   if (error || !data) throw AppError.notFound('Account')
-  return data
+  return withDisplayIds(data as Record<string, unknown>)
 }
 
 export async function createAccount(dto: CreateAccountDto, createdBy: string) {
@@ -93,7 +142,7 @@ export async function createAccount(dto: CreateAccountDto, createdBy: string) {
   return data
 }
 
-export async function updateAccount(id: string, dto: UpdateAccountDto) {
+export async function updateAccount(id: string, dto: UpdateAccountDto, changedBy?: string) {
   await getAccount(id)
 
   const updates: Record<string, unknown> = {}
@@ -118,12 +167,22 @@ export async function updateAccount(id: string, dto: UpdateAccountDto) {
   if (dto.creditLimit     !== undefined) updates.credit_limit     = dto.creditLimit
   if (dto.paymentTerms    !== undefined) updates.payment_terms    = dto.paymentTerms
   if (dto.isActive        !== undefined) updates.is_active        = dto.isActive
+  if (dto.businessType    !== undefined) updates.business_type    = dto.businessType
+  if (dto.industry        !== undefined) updates.industry         = dto.industry
 
   const { data, error } = await accountsRepo.updateById(id, updates)
   if (error || !data) throw AppError.internal('Failed to update account', error)
 
   const accountName = data.account_name as string
   void notificationsService.notifyAllAdmins('account_updated', 'Account updated', `Account "${accountName}" was updated.`, 'account', id)
+  void logAccountActivity({
+    accountId: id,
+    eventType: 'account_updated',
+    description: `Company details updated (${Object.keys(updates).length} field${Object.keys(updates).length === 1 ? '' : 's'})`,
+    actorId: changedBy ?? null,
+    actorLabel: changedBy ? await actorLabel(changedBy) : 'Administrator',
+    metadata: { fields: Object.keys(updates) },
+  })
   const companyAdminId = await findCompanyAdminId(id)
   if (companyAdminId) {
     notifyUser(companyAdminId, 'account_updated', 'Your account was updated', `Your company account "${accountName}" was updated by an administrator.`, id)
@@ -249,7 +308,11 @@ export async function deleteAccountNote(accountId: string, noteId: string) {
 export async function getOwnProfile(userId: string) {
   const { data, error } = await accountsRepo.findAccountByUserId(userId)
   if (error || !data) throw AppError.notFound('Account')
-  return data
+  // The customer sees their own IDs / review status, but never the internal
+  // review note or who rejected them.
+  const { review_note, rejected_by, reviewed_by, ...safe } = data as Record<string, unknown>
+  void review_note; void rejected_by; void reviewed_by
+  return withDisplayIds(safe)
 }
 
 export async function updateOwnProfile(userId: string, dto: UpdateOwnProfileDto) {
@@ -291,6 +354,8 @@ export async function updateOwnCompany(userId: string, dto: UpdateOwnCompanyDto)
   if (dto.contactPhone          !== undefined) updates.contact_phone          = dto.contactPhone
   if (dto.billingEmail          !== undefined) updates.billing_email          = blankToNull(dto.billingEmail)
   if (dto.accountsPayableEmail  !== undefined) updates.accounts_payable_email = blankToNull(dto.accountsPayableEmail)
+  if (dto.businessType          !== undefined) updates.business_type          = blankToNull(dto.businessType)
+  if (dto.industry              !== undefined) updates.industry               = blankToNull(dto.industry)
 
   const { data, error } = await accountsRepo.updateById(accountId, updates)
   if (error || !data) throw AppError.internal('Failed to update company profile', error)
@@ -302,6 +367,14 @@ export async function updateOwnCompany(userId: string, dto: UpdateOwnCompanyDto)
     'account',
     accountId,
   )
+  void logAccountActivity({
+    accountId,
+    eventType: 'account_updated',
+    description: `Company details updated by the customer (${Object.keys(updates).length} field${Object.keys(updates).length === 1 ? '' : 's'})`,
+    actorId: userId,
+    actorLabel: await actorLabel(userId),
+    metadata: { fields: Object.keys(updates) },
+  })
 
   return data
 }
@@ -340,4 +413,157 @@ export async function removeLogo(accountId: string) {
   if (error) throw AppError.internal('Failed to clear company logo', error)
 
   void notificationsService.notifyAllAdmins('account_updated', 'Company logo removed', 'A corporate removed their own company logo.', 'account', accountId)
+}
+
+// ── Admin: review lifecycle (reject / reconsider / purge) ────────────────────
+
+// Reject a corporate account request: soft-delete + block login, keep a
+// 90-day retention window (purge_after) after which migration 073's sweep
+// hard-deletes everything. Reversible via reconsider() until then.
+export async function rejectAccount(id: string, dto: RejectAccountDto, adminId: string) {
+  const account = await getAccount(id, true)
+  if (account.rejected_at) throw AppError.badRequest('This account request is already rejected')
+
+  const now = new Date()
+  const purgeAfter = new Date(now.getTime() + REJECTION_RETENTION_DAYS * 86_400_000)
+
+  const { data, error } = await accountsRepo.lifecycleUpdate(id, {
+    rejected_at:      now.toISOString(),
+    rejected_by:      adminId,
+    rejection_reason: dto.reason,
+    review_note:      dto.note ?? null,
+    reviewed_at:      now.toISOString(),
+    reviewed_by:      adminId,
+    purge_after:      purgeAfter.toISOString(),
+    deleted_at:       now.toISOString(),
+    is_active:        false,
+  })
+  if (error || !data) throw AppError.internal('Failed to reject account', error)
+
+  // Block portal access for every profile on the account.
+  await accountsRepo.setProfilesApproval(id, false, false)
+  const { data: profiles } = await accountsRepo.findProfilesForAccount(id)
+  for (const p of profiles ?? []) {
+    await authRepo.revokeAllUserTokens(p.id as string).catch(() => undefined)
+  }
+
+  const label = await actorLabel(adminId)
+  await logAccountActivity({
+    accountId: id, eventType: 'reviewed', description: 'Application reviewed',
+    actorId: adminId, actorLabel: label,
+  })
+  await logAccountActivity({
+    accountId: id, eventType: 'rejected',
+    description: `Application rejected — ${dto.reason}`,
+    actorId: adminId, actorLabel: label,
+    metadata: { reason: dto.reason, purgeAfter: purgeAfter.toISOString() },
+  })
+
+  void notificationsService.notifyAllAdmins(
+    'account_updated', 'Corporate request rejected',
+    `"${account.account_name}" was rejected. Data purges on ${purgeAfter.toISOString().slice(0, 10)}.`,
+    'account', id, adminId,
+  )
+
+  return withDisplayIds(data as Record<string, unknown>)
+}
+
+// Undo a rejection while still inside the retention window.
+export async function reconsiderAccount(id: string, adminId: string) {
+  const account = await getAccount(id, true)
+  if (!account.rejected_at) throw AppError.badRequest('This account is not rejected')
+  if (account.purge_after && new Date(account.purge_after as string).getTime() < Date.now()) {
+    throw AppError.badRequest('The retention window has closed — this account can no longer be restored')
+  }
+
+  const { data, error } = await accountsRepo.lifecycleUpdate(id, {
+    rejected_at:      null,
+    rejected_by:      null,
+    rejection_reason: null,
+    review_note:      null,
+    reviewed_at:      null,
+    reviewed_by:      null,
+    purge_after:      null,
+    deleted_at:       null,
+    is_active:        true,
+  })
+  if (error || !data) throw AppError.internal('Failed to reconsider account', error)
+
+  // Re-enable profiles but keep them PENDING (is_approved = false) — reconsider
+  // returns the request to the review queue, it does not approve it.
+  await accountsRepo.setProfilesApproval(id, false, true)
+
+  const label = await actorLabel(adminId)
+  await logAccountActivity({
+    accountId: id, eventType: 'reconsidered',
+    description: 'Rejection withdrawn — request reopened for review',
+    actorId: adminId, actorLabel: label,
+  })
+
+  void notificationsService.notifyAllAdmins(
+    'account_updated', 'Corporate request reopened',
+    `"${account.account_name}" was moved back to pending review.`,
+    'account', id, adminId,
+  )
+
+  return withDisplayIds(data as Record<string, unknown>)
+}
+
+// Skip the retention window and hard-delete now. Irreversible.
+export async function purgeAccount(id: string, adminId: string) {
+  const account = await getAccount(id, true)
+  if (!account.rejected_at) {
+    throw AppError.badRequest('Only a rejected account can be purged')
+  }
+  const { error } = await accountsRepo.purgeAccountRpc(id)
+  if (error) throw AppError.internal('Failed to purge account', error)
+
+  void notificationsService.notifyAllAdmins(
+    'account_updated', 'Corporate account purged',
+    `"${account.account_name}" and all linked data were permanently deleted.`,
+    'account', id, adminId,
+  )
+}
+
+// ── Stats + activity (shared by admin detail and corporate own-company page) ──
+export async function getAccountStats(accountId: string) {
+  const { data: profiles } = await accountsRepo.findProfilesForAccount(accountId)
+  const profileIds = (profiles ?? []).map((p) => p.id as string)
+
+  const [totalRes, activeRes, deliveredRes, quotesRes, paidRes] = await Promise.all([
+    accountsRepo.countShipments(accountId, 'all'),
+    accountsRepo.countShipments(accountId, 'active'),
+    accountsRepo.countShipments(accountId, 'delivered'),
+    accountsRepo.countOpenQuotes(profileIds),
+    accountsRepo.sumPaidInvoices(profileIds),
+  ])
+
+  const totalSpend = (paidRes.data ?? []).reduce(
+    (sum, r) => sum + Number((r as { total: number }).total ?? 0), 0,
+  )
+
+  return {
+    totalShipments:     totalRes.count ?? 0,
+    activeShipments:    activeRes.count ?? 0,
+    deliveredShipments: deliveredRes.count ?? 0,
+    openQuotes:         quotesRes.count ?? 0,
+    totalSpend,
+  }
+}
+
+export async function getAccountActivity(accountId: string, includeInternal: boolean) {
+  const { data, error } = await accountsRepo.listActivity(accountId, { includeInternal })
+  if (error) throw AppError.internal('Failed to fetch activity', error)
+  return data ?? []
+}
+
+// Corporate self-service equivalents — scoped to the caller's own account.
+export async function getOwnAccountStats(userId: string) {
+  const accountId = await getOwnAccountId(userId)
+  return getAccountStats(accountId)
+}
+
+export async function getOwnAccountActivity(userId: string) {
+  const accountId = await getOwnAccountId(userId)
+  return getAccountActivity(accountId, false)
 }

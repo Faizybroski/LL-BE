@@ -12,6 +12,10 @@ const BIRTHDAY_BONUS_SLUG   = 'birthday_bonus'     // flat points, once every ro
 
 const BIRTHDAY_BONUS_COOLDOWN_MS = 365 * 86_400_000
 
+// A rewards redemption can only ever cover half of a quotation — the customer
+// always pays at least 50% in cash, no matter how large their points balance.
+const MAX_REDEMPTION_PCT = 0.5
+
 async function getRuleValue(slug: string, fallback: number): Promise<number> {
   const { data, error } = await rewardsCreditRepo.findRewardsRuleValue(slug)
   if (error || !data || data.value == null) return fallback
@@ -84,8 +88,13 @@ async function awardBirthdayBonusIfDue(profileId: string): Promise<void> {
   }
 }
 
-export async function getSummary(profileId: string): Promise<RewardsSummary> {
-  await awardBirthdayBonusIfDue(profileId)
+export async function getSummary(
+  profileId: string,
+  opts: { award?: boolean } = {},
+): Promise<RewardsSummary> {
+  // An admin viewing a customer's balance must not trigger a birthday-bonus
+  // award on that customer's behalf — only the customer's own read does.
+  if (opts.award !== false) await awardBirthdayBonusIfDue(profileId)
 
   const [{ data }, conversionRate] = await Promise.all([
     rewardsCreditRepo.findBalance(profileId),
@@ -149,8 +158,9 @@ export interface RedeemResult {
   newBalance:     number
 }
 
-// Redeems as many points as it takes to cover the quotation total (capped
-// by the customer's balance) — min(pointsValueInDollars, quotationTotal).
+// Redeems points toward a quotation, capped by BOTH the customer's balance
+// and MAX_REDEMPTION_PCT of the quotation total (they always pay >= 50% cash):
+//   applied = min(pointsValueInDollars, 50% x quotationTotal)
 export async function redeemPointsForQuotation(
   profileId:      string,
   quotationId:    string,
@@ -163,7 +173,8 @@ export async function redeemPointsForQuotation(
   const currentPoints = (balanceRow?.points_balance as number | undefined) ?? 0
   const availableDollars = conversionRate > 0 ? currentPoints / conversionRate : 0
 
-  const appliedDollars = Math.round(Math.min(availableDollars, quotationTotal) * 100) / 100
+  const redemptionCap = Math.round(quotationTotal * MAX_REDEMPTION_PCT * 100) / 100
+  const appliedDollars = Math.round(Math.min(availableDollars, redemptionCap) * 100) / 100
   if (appliedDollars <= 0) return { appliedDollars: 0, appliedPoints: 0, newBalance: currentPoints }
 
   const appliedPoints = Math.min(currentPoints, Math.round(appliedDollars * conversionRate))

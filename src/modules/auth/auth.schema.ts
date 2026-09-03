@@ -25,6 +25,8 @@ export const logoutSchema = z.object({
 })
 
 // ── POST /auth/register ────────────────────────────────────────────────────────
+const optionalTrimmed = z.string().trim().max(200).optional().or(z.literal(''))
+
 export const registerSchema = z
   .object({
     email: z.string().email('Invalid email address').toLowerCase(),
@@ -34,15 +36,48 @@ export const registerSchema = z
       .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
       .regex(/[0-9]/, 'Password must contain at least one number'),
     fullName: z.string().min(2, 'Full name must be at least 2 characters').max(100),
-    // 'corporate' = shipping company (creates an accounts row, role='corporate');
+    // 'corporate' = company account (creates an accounts row, role='corporate');
     // 'residential' = individual customer (no accounts row, role='residential').
     accountType: z.enum(['corporate', 'residential']).default('corporate'),
     company: z.string().min(2, 'Company name is required').max(200).optional(),
     phone: z.string().min(7).max(30).optional(),
+
+    // ── Corporate company profile — captured at sign-up so the admin review
+    //    and the customer's own company page have the full picture from day
+    //    one (parity with GET /accounts/:id and /accounts/me). All optional
+    //    at the schema level; the core ones are required for corporate below.
+    businessType:         optionalTrimmed,
+    industry:             optionalTrimmed,
+    abn:                  optionalTrimmed,
+    website:              z.string().trim().url('Enter a valid URL').max(200).optional().or(z.literal('')),
+    addressLine1:         optionalTrimmed,
+    addressCity:          optionalTrimmed,
+    addressState:         optionalTrimmed,
+    addressPostcode:      z.string().trim().max(20).optional().or(z.literal('')),
+    addressCountry:       optionalTrimmed,
+    billingEmail:         z.string().trim().email('Enter a valid email').optional().or(z.literal('')),
+    accountsPayableEmail: z.string().trim().email('Enter a valid email').optional().or(z.literal('')),
   })
-  .refine((data) => data.accountType !== 'corporate' || !!data.company, {
-    message: 'Company name is required',
-    path: ['company'],
+  .refine((d) => d.accountType !== 'corporate' || !!d.company, {
+    message: 'Company name is required', path: ['company'],
+  })
+  .refine((d) => d.accountType !== 'corporate' || !!d.businessType, {
+    message: 'Business type is required', path: ['businessType'],
+  })
+  .refine((d) => d.accountType !== 'corporate' || !!d.industry, {
+    message: 'Industry is required', path: ['industry'],
+  })
+  .refine((d) => d.accountType !== 'corporate' || !!d.addressLine1, {
+    message: 'Business address is required', path: ['addressLine1'],
+  })
+  .refine((d) => d.accountType !== 'corporate' || !!d.addressCity, {
+    message: 'City is required', path: ['addressCity'],
+  })
+  .refine((d) => d.accountType !== 'corporate' || !!d.addressState, {
+    message: 'State / province is required', path: ['addressState'],
+  })
+  .refine((d) => d.accountType !== 'corporate' || !!d.addressPostcode, {
+    message: 'Postcode is required', path: ['addressPostcode'],
   })
 
 // ── POST /auth/change-password ─────────────────────────────────────────────────

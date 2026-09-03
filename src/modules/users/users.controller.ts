@@ -70,7 +70,7 @@ export async function removeMyAvatar(req: Request, res: Response, next: NextFunc
 
 export async function approveUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const updated = await usersService.approveUser(param(req, 'id'), req.body as ApproveUserDto)
+    const updated = await usersService.approveUser(param(req, 'id'), req.body as ApproveUserDto, req.user!.id)
     ok(res, updated, 'Approval status updated')
   } catch (err) {
     next(err)

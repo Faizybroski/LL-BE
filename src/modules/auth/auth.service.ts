@@ -461,10 +461,36 @@ export async function register(
     return registerResidential(userId, data.user!.email!, dto, context)
   }
 
-  // Create an account (company) for the new corporate
+  // Empty-string fields from the form mean "not provided".
+  const clean = (v: string | undefined | null): string | null => {
+    const t = (v ?? '').trim()
+    return t.length > 0 ? t : null
+  }
+
+  // Create an account (company) for the new corporate — capture the full
+  // company profile up front so the admin review page and the customer's own
+  // company page have everything from day one. The primary contact defaults
+  // to the applicant (they can be split out later from the company page).
   const { data: account, error: accountError } = await supabase
     .from('accounts')
-    .insert({ account_name: dto.company, created_by: userId })
+    .insert({
+      account_name:     dto.company,
+      created_by:       userId,
+      business_type:    clean(dto.businessType),
+      industry:         clean(dto.industry),
+      abn:              clean(dto.abn),
+      website:          clean(dto.website),
+      address_line1:    clean(dto.addressLine1),
+      address_city:     clean(dto.addressCity),
+      address_state:    clean(dto.addressState),
+      address_postcode: clean(dto.addressPostcode),
+      address_country:  clean(dto.addressCountry),
+      contact_name:     dto.fullName,
+      contact_email:    dto.email,
+      contact_phone:    clean(dto.phone),
+      billing_email:          clean(dto.billingEmail),
+      accounts_payable_email: clean(dto.accountsPayableEmail),
+    })
     .select('account_id')
     .single()
 
@@ -530,6 +556,33 @@ export async function register(
     await supabase.auth.admin.deleteUser(userId)
     throw AppError.internal('Failed to complete registration — please try again', profileLinkError)
   }
+
+  // Seed the account lifecycle feed (Application History on the profile pages).
+  // The 'submitted' row carries a snapshot of what the applicant provided so
+  // the history reflects the data actually captured at registration.
+  void (async () => {
+    const rows: Array<{ event_type: string; description: string; metadata?: Record<string, unknown> }> = [
+      {
+        event_type:  'submitted',
+        description: 'Account request submitted',
+        metadata: {
+          company:      dto.company,
+          businessType: clean(dto.businessType),
+          industry:     clean(dto.industry),
+          location:     [clean(dto.addressCity), clean(dto.addressState), clean(dto.addressCountry)].filter(Boolean).join(', ') || null,
+          website:      clean(dto.website),
+        },
+      },
+      { event_type: 'terms_accepted', description: 'Terms & conditions accepted' },
+      { event_type: 'admin_added',    description: `Company admin added — ${dto.fullName}` },
+    ]
+    for (const r of rows) {
+      await supabase
+        .from('account_activity')
+        .insert({ account_id: account.account_id, actor_label: 'System', ...r })
+        .then(undefined, () => undefined)
+    }
+  })()
 
   // Issue a token pair so the client can be logged in immediately after registration
   const tokens = await issueTokenPair(
