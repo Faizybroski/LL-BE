@@ -56,9 +56,14 @@ export async function listInvoices(
   callerRole: string,
   callerId: string,
   callerAccountId?: string | null,
+  ownScopedKeys?: string[],
 ) {
   const accountId  = callerRole === 'corporate' ? (callerAccountId ?? undefined) : undefined
-  const { data, count, error } = await repo.findAll(query, accountId)
+  // Own/assigned-only scope (admin_role_permissions.scope = 'own' on
+  // 'invoices.view') — restricts an admin to invoices linked to deliveries
+  // assigned to them (standalone invoices stay visible to all).
+  const employeeId = callerRole === 'admin' && ownScopedKeys?.includes('invoices.view') ? callerId : undefined
+  const { data, count, error } = await repo.findAll(query, accountId, employeeId)
   if (error) throw AppError.internal('Failed to fetch invoices', error)
   return { invoices: data ?? [], total: count ?? 0 }
 }

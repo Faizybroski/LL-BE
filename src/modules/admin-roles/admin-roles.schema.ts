@@ -13,6 +13,11 @@ export const adminRoleParamSchema = z.object({
 
 export const updateRolePermissionSchema = z.object({
   granted: z.boolean(),
+  // Only meaningful for permission keys under Delivery Management, Quotations
+  // and Invoices — the categories where a "this staff member's own/assigned
+  // records only" filter is actually implemented (see deliveries/quotations/
+  // invoices repositories). Optional: omitting it leaves scope unchanged.
+  scope:   z.enum(['all', 'own']).optional(),
 })
 
 export type UpdateRolePermissionDto = z.infer<typeof updateRolePermissionSchema>

@@ -11,6 +11,7 @@ declare global {
         companyRole: CompanyRole
         adminRole:   AdminRole
         permissions: string[]
+        ownScopedKeys: string[]
       }
       requestId: string
       startTime: number

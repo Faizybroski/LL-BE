@@ -22,7 +22,7 @@ export async function getPermissionsMatrix() {
 }
 
 // ── Toggle a single grant ─────────────────────────────────────────────────────
-export async function updateRolePermission(role: AdminRoleValue, permissionKey: string, granted: boolean) {
+export async function updateRolePermission(role: AdminRoleValue, permissionKey: string, granted: boolean, scope?: 'all' | 'own') {
   if (role === 'ceo' && permissionKey === CEO_LOCKED_PERMISSION && !granted) {
     throw AppError.badRequest('The CEO role must always retain the "Manage Permissions" permission')
   }
@@ -30,7 +30,7 @@ export async function updateRolePermission(role: AdminRoleValue, permissionKey: 
   const { data: existing, error: findErr } = await adminRolesRepo.findGrant(role, permissionKey)
   if (findErr || !existing) throw AppError.notFound('Permission')
 
-  const { data, error } = await adminRolesRepo.upsertGrant(role, permissionKey, granted)
+  const { data, error } = await adminRolesRepo.upsertGrant(role, permissionKey, granted, scope)
   if (error || !data) throw AppError.internal('Failed to update permission', error)
 
   return data

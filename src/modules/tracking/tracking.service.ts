@@ -18,6 +18,7 @@ function cast<T>(r: unknown): T {
 
 function notifyUser(
   userId:   string,
+  type:     'tracking_event_created' | 'tracking_event_updated' | 'tracking_event_deleted',
   title:    string,
   body:     string,
   entityId: string,
@@ -25,13 +26,31 @@ function notifyUser(
   void notificationsService
     .createNotification({
       userId,
-      type:       'tracking_event_created',
+      type,
       title,
       body,
       entityType: 'delivery',
       entityId,
     })
     .catch(() => undefined)
+}
+
+// Everyone assigned to the delivery, other than the actor — shared by
+// create/update/delete so the driver hears about tracking changes too.
+async function notifyAssignees(
+  loadId:   string,
+  type:     'tracking_event_created' | 'tracking_event_updated' | 'tracking_event_deleted',
+  title:    string,
+  body:     string,
+  actorId:  string,
+): Promise<void> {
+  const { data: assignees } = await supabase
+    .from('delivery_assignments')
+    .select('employee_id')
+    .eq('delivery_id', loadId)
+  for (const assignee of assignees ?? []) {
+    if (assignee.employee_id !== actorId) notifyUser(assignee.employee_id as string, type, title, body, loadId)
+  }
 }
 
 // ── Access: verify user can see / modify this delivery ────────────────────────────
@@ -150,17 +169,11 @@ export async function createEvent(
 
   // Notify the delivery creator
   if (shipDelivery.created_by && shipDelivery.created_by !== userId) {
-    notifyUser(shipDelivery.created_by as string, title, body, dto.loadId)
+    notifyUser(shipDelivery.created_by as string, 'tracking_event_created', title, body, dto.loadId)
   }
 
   // Notify everyone assigned to this delivery, other than the actor
-  const { data: assignees } = await supabase
-    .from('delivery_assignments')
-    .select('employee_id')
-    .eq('delivery_id', dto.loadId)
-  for (const assignee of assignees ?? []) {
-    if (assignee.employee_id !== userId) notifyUser(assignee.employee_id as string, title, body, dto.loadId)
-  }
+  await notifyAssignees(dto.loadId, 'tracking_event_created', title, body, userId)
 
   // Notify company admins if admin created this event
   if (isAdmin && shipDelivery.account_id) {
@@ -170,7 +183,7 @@ export async function createEvent(
       .eq('account_id', shipDelivery.account_id)
       .eq('company_role', 'company_admin')
     for (const admin of companyAdmins ?? []) {
-      notifyUser(admin.id, title, body, dto.loadId)
+      notifyUser(admin.id, 'tracking_event_created', title, body, dto.loadId)
     }
   }
 
@@ -194,7 +207,7 @@ export async function updateEvent(
   if (fetchErr || !raw) throw AppError.notFound('Tracking event')
   const event = cast<Row>(raw)
 
-  await requireDeliveryAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
+  const delivery = await requireDeliveryAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
 
   // Ownership check: non-admins can only edit their own events
   if (!isAdmin) {
@@ -216,9 +229,18 @@ export async function updateEvent(
   const { data, error } = await trackingRepo.updateById(id, updates)
   if (error || !data) throw AppError.internal('Failed to update tracking event', error)
 
+  const updateTitle = 'Tracking event updated'
+  const updateBody  = 'A tracking event on your delivery was updated.'
+
+  // Notify the delivery creator and every assigned employee, not just leadership.
+  if (delivery.created_by && delivery.created_by !== userId) {
+    notifyUser(delivery.created_by as string, 'tracking_event_updated', updateTitle, updateBody, event.load_id as string)
+  }
+  await notifyAssignees(event.load_id as string, 'tracking_event_updated', updateTitle, updateBody, userId)
+
   void notificationsService.notifyAllAdmins(
     'tracking_event_updated',
-    'Tracking event updated',
+    updateTitle,
     isAdmin ? 'A tracking event was updated.' : 'A corporate updated a tracking event.',
     'delivery',
     event.load_id as string,
@@ -240,7 +262,7 @@ export async function deleteEvent(
   if (fetchErr || !raw) throw AppError.notFound('Tracking event')
   const event = cast<Row>(raw)
 
-  await requireDeliveryAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
+  const delivery = await requireDeliveryAccess(event.load_id as string, isAdmin, accountId, userId, companyRole)
 
   if (!isAdmin) {
     const isCreator      = event.created_by === userId
@@ -253,9 +275,18 @@ export async function deleteEvent(
   const { error } = await trackingRepo.deleteById(id)
   if (error) throw AppError.internal('Failed to delete tracking event', error)
 
+  const deleteTitle = 'Tracking event deleted'
+  const deleteBody  = 'A tracking event on your delivery was deleted.'
+
+  // Notify the delivery creator and every assigned employee, not just leadership.
+  if (delivery.created_by && delivery.created_by !== userId) {
+    notifyUser(delivery.created_by as string, 'tracking_event_deleted', deleteTitle, deleteBody, event.load_id as string)
+  }
+  await notifyAssignees(event.load_id as string, 'tracking_event_deleted', deleteTitle, deleteBody, userId)
+
   void notificationsService.notifyAllAdmins(
     'tracking_event_deleted',
-    'Tracking event deleted',
+    deleteTitle,
     isAdmin ? 'A tracking event was deleted.' : 'A corporate deleted a tracking event.',
     'delivery',
     event.load_id as string,

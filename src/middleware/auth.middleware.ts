@@ -39,6 +39,7 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
     companyRole: payload.companyRole ?? null,
     adminRole:   payload.adminRole ?? null,
     permissions: payload.permissions ?? [],
+    ownScopedKeys: payload.ownScopedKeys ?? [],
   }
 
   next()

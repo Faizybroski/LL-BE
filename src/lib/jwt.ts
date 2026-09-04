@@ -14,6 +14,7 @@ export interface JwtPayload {
   companyRole: CompanyRole      // company_admin | employee | null (null for admins)
   adminRole?:  AdminRole        // ceo | vp | manager | assistant | null (null for corporates)
   permissions?: string[]        // resolved granted permission keys for adminRole, snapshotted at issue time
+  ownScopedKeys?: string[]      // subset of `permissions` whose grant has scope='own' — records must be filtered to this admin's own/assigned ones
   iat:         number          // issued-at  (added automatically by jsonwebtoken)
   exp:         number          // expiry     (added automatically by jsonwebtoken)
 }

@@ -25,6 +25,7 @@ export async function stats(req: Request, res: Response, next: NextFunction): Pr
       req.user!.role,
       req.user!.id,
       req.user!.accountId,
+      req.user!.ownScopedKeys,
     )
     ok(res, result)
   } catch (err) {
@@ -40,6 +41,7 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       req.user!.role,
       req.user!.id,
       req.user!.accountId,
+      req.user!.ownScopedKeys,
     )
     paginated(res, quotations, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {

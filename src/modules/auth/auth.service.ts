@@ -22,17 +22,23 @@ import type {
 } from './auth.schema'
 import type { UserRole, CompanyRole, AdminRole } from '../../middleware/auth.middleware'
 
-// Fetches the granted permission keys for an admin role at token-issue time.
-// Returns [] for non-admin users (companyRole path never calls this).
-async function resolveAdminPermissions(adminRole: AdminRole): Promise<string[]> {
-  if (!adminRole) return []
+// Fetches the granted permission keys for an admin role at token-issue time,
+// plus the subset scoped to "own/assigned only" (scope='own') — used by
+// deliveries/quotations/invoices to filter list/detail results down to only
+// the records tied to that specific staff member. Returns empty arrays for
+// non-admin users (companyRole path never calls this).
+async function resolveAdminPermissions(adminRole: AdminRole): Promise<{ permissions: string[]; ownScopedKeys: string[] }> {
+  if (!adminRole) return { permissions: [], ownScopedKeys: [] }
   const { data, error } = await supabase
     .from('admin_role_permissions')
-    .select('permission_key')
+    .select('permission_key, scope')
     .eq('admin_role', adminRole)
     .eq('granted', true)
-  if (error || !data) return []
-  return data.map((row) => row.permission_key as string)
+  if (error || !data) return { permissions: [], ownScopedKeys: [] }
+  return {
+    permissions:   data.map((row) => row.permission_key as string),
+    ownScopedKeys: data.filter((row) => row.scope === 'own').map((row) => row.permission_key as string),
+  }
 }
 
 // Converts JWT duration strings ("15m", "1h", "30s") to seconds for the API response.
@@ -62,8 +68,8 @@ async function issueTokenPair(
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number; permissions: string[] }> {
   // 1. Sign a short-lived JWT (15 min by default), embedding a permission
   // snapshot resolved from admin_role_permissions for admin users.
-  const permissions = await resolveAdminPermissions(adminRole)
-  const accessToken = signAccessToken({ sub: userId, email, role, accountId, companyRole, adminRole, permissions })
+  const { permissions, ownScopedKeys } = await resolveAdminPermissions(adminRole)
+  const accessToken = signAccessToken({ sub: userId, email, role, accountId, companyRole, adminRole, permissions, ownScopedKeys })
 
   // 2. Generate an opaque refresh token and store its SHA-256 hash
   const { rawToken, tokenHash } = generateRefreshToken()
@@ -416,7 +422,7 @@ export async function getMe(userId: string) {
   if (!data.is_active) throw AppError.forbidden('Account has been deactivated')
 
   const { data: authUser } = await supabase.auth.admin.getUserById(userId)
-  const permissions = await resolveAdminPermissions((data.admin_role ?? null) as AdminRole)
+  const { permissions } = await resolveAdminPermissions((data.admin_role ?? null) as AdminRole)
 
   return {
     id:          data.id,

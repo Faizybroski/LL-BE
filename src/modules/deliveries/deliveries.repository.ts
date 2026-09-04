@@ -113,6 +113,7 @@ export async function findAll(
   userId?:     string,
   companyRole?: string | null,
   isResidential = false,
+  ownScoped    = false,
 ) {
   const offset = (query.page - 1) * query.limit
 
@@ -142,10 +143,20 @@ export async function findAll(
         q = q.eq('created_by', userId)
       }
     }
-  } else if (isAdmin && query.accountId) {
-    q = q.eq('account_id', query.accountId)
-  } else if (isAdmin && query.customerId) {
-    q = q.eq('customer_id', query.customerId)
+  } else {
+    // Own/assigned-only scope (admin_role_permissions.scope = 'own' on
+    // 'deliveries.view') — restrict to deliveries this staff member is
+    // assigned to via delivery_assignments.
+    if (ownScoped && userId) {
+      const assignedIds = await findAssignedDeliveryIds(userId)
+      q = assignedIds.length > 0
+        ? q.in('shipment_id', assignedIds)
+        // No assignments at all — force an empty result set rather than
+        // falling through to "no filter = see everything".
+        : q.eq('shipment_id', '00000000-0000-0000-0000-000000000000')
+    }
+    if (query.accountId)  q = q.eq('account_id', query.accountId)
+    if (query.customerId) q = q.eq('customer_id', query.customerId)
   }
 
   // ── Filters ───────────────────────────────────────────────────────────────

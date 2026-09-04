@@ -37,10 +37,34 @@ function applyInvoiceFilters(q: any, query: ListInvoicesQuery): any {
 
 // Corporate customers have no employees of their own — one login per account,
 // so the only non-admin scope is by account.
-export async function findAll(query: ListInvoicesQuery, accountId?: string) {
+export async function findAll(query: ListInvoicesQuery, accountId?: string, employeeId?: string) {
   const sortField = query.sortBy ?? 'created_at'
   const ascending = query.sortDir === 'asc'
   const range     = [(query.page - 1) * query.limit, query.page * query.limit - 1] as const
+
+  // Employee (own/assigned) scope: only invoices linked to deliveries
+  // assigned to them, PLUS every standalone invoice (load_id IS NULL) —
+  // those aren't attributable to any employee, so they stay visible to
+  // everyone regardless of scope rather than being hidden. Mirrors the
+  // equivalent branch in quotations.repository.ts::findAll.
+  if (employeeId) {
+    const { data: deliveries } = await supabase
+      .from('shipments').select('shipment_id').eq('assigned_employee_id', employeeId)
+    const loadIds = (deliveries ?? []).map((l: { shipment_id: string }) => l.shipment_id)
+
+    let eq: any = supabase
+      .from(TABLE)
+      .select(INVOICE_SELECT, { count: 'exact' })
+      .is('deleted_at', null)
+      .order(sortField, { ascending })
+      .range(...range)
+
+    eq = loadIds.length > 0
+      ? eq.or(`load_id.in.(${loadIds.join(',')}),load_id.is.null`)
+      : eq.is('load_id', null)
+
+    return applyInvoiceFilters(eq, query)
+  }
 
   let q: any = supabase
     .from(TABLE)

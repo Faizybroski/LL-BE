@@ -17,8 +17,8 @@ export async function updatePermission(req: Request, res: Response, next: NextFu
   try {
     const role = param(req, 'role') as AdminRoleValue
     const permissionKey = param(req, 'permissionKey')
-    const { granted } = req.body as UpdateRolePermissionDto
-    const grant = await adminRolesService.updateRolePermission(role, permissionKey, granted)
+    const { granted, scope } = req.body as UpdateRolePermissionDto
+    const grant = await adminRolesService.updateRolePermission(role, permissionKey, granted, scope)
     ok(res, grant, 'Permission updated')
   } catch (err) {
     next(err)

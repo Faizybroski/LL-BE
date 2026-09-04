@@ -68,12 +68,14 @@ export async function findAll(
     return applyQuotationFilters(q, query)
   }
 
-  // Employee scope: only quotations linked to deliveries assigned to them
+  // Employee (own/assigned) scope: only quotations linked to deliveries
+  // assigned to them, PLUS every standalone quotation (load_id IS NULL) —
+  // those aren't attributable to any employee, so they stay visible to
+  // everyone regardless of scope rather than being hidden.
   if (employeeId) {
     const { data: deliveries } = await supabase
       .from('shipments').select('shipment_id').eq('assigned_employee_id', employeeId)
     const loadIds = (deliveries ?? []).map((l: { shipment_id: string }) => l.shipment_id)
-    if (loadIds.length === 0) return { data: [], count: 0, error: null }
 
     let eq: any = supabase
       .from(TABLE)
@@ -81,7 +83,10 @@ export async function findAll(
       .is('deleted_at', null)
       .order(sortField, { ascending })
       .range(...range)
-      .in('load_id', loadIds)
+
+    eq = loadIds.length > 0
+      ? eq.or(`load_id.in.(${loadIds.join(',')}),load_id.is.null`)
+      : eq.is('load_id', null)
 
     if (excludeDraft) eq = eq.neq('status', 'draft')
 
@@ -122,8 +127,10 @@ export async function findAll(
 export async function getStats(accountId?: string, employeeId?: string, excludeDraft?: boolean, profileId?: string) {
   const today = new Date().toISOString().slice(0, 10)
 
-  // Employee scope: only quotations linked to deliveries assigned to them
-  let employeeDeliveryIds: string[] | undefined
+  // Employee (own/assigned) scope: quotations linked to deliveries assigned
+  // to them, PLUS every standalone quotation (load_id IS NULL) — mirrors
+  // findAll's employeeId branch.
+  let employeeScopeOr: string | undefined
   // Company admin scope: quotations linked to company-owned deliveries OR unlinked docs created by company members
   let accountScopeOr: string | undefined
 
@@ -132,10 +139,10 @@ export async function getStats(accountId?: string, employeeId?: string, excludeD
   } else if (employeeId) {
     const { data: deliveries } = await supabase
       .from('shipments').select('shipment_id').eq('assigned_employee_id', employeeId)
-    employeeDeliveryIds = (deliveries ?? []).map((l: { shipment_id: string }) => l.shipment_id)
-    if (employeeDeliveryIds.length === 0) {
-      return { total: 0, pendingReview: 0, accepted: 0, expired: 0 }
-    }
+    const employeeDeliveryIds = (deliveries ?? []).map((l: { shipment_id: string }) => l.shipment_id)
+    employeeScopeOr = employeeDeliveryIds.length > 0
+      ? `load_id.in.(${employeeDeliveryIds.join(',')}),load_id.is.null`
+      : 'load_id.is.null'
   } else if (accountId) {
     const [{ data: deliveries }, { data: profiles }] = await Promise.all([
       supabase.from('shipments').select('shipment_id').eq('account_id', accountId),
@@ -158,8 +165,8 @@ export async function getStats(accountId?: string, employeeId?: string, excludeD
     if (excludeDraft) q = q.neq('status', 'draft')
     if (profileId) {
       q = q.eq('profile_id', profileId)
-    } else if (employeeDeliveryIds) {
-      q = q.in('load_id', employeeDeliveryIds)
+    } else if (employeeScopeOr) {
+      q = q.or(employeeScopeOr)
     } else if (accountScopeOr) {
       q = q.or(accountScopeOr)
     }

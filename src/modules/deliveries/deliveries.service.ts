@@ -28,7 +28,7 @@ function cast<T>(record: unknown): T {
 // Fire-and-forget — notifications must never block the main operation.
 function notifyUser(
   userId:   string,
-  type:     'shipment_created' | 'shipment_updated' | 'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled' | 'shipment_eta_updated' | 'shipment_deleted',
+  type:     'shipment_created' | 'shipment_updated' | 'shipment_confirmed' | 'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled' | 'shipment_eta_updated' | 'shipment_deleted',
   title:    string,
   body:     string,
   entityId: string,
@@ -76,6 +76,7 @@ async function requireDeliveryAccess(
   userId?:     string,
   companyRole?: string | null,
   isResidential = false,
+  ownScoped    = false,
 ): Promise<DeliveryRow> {
   const { data, error } = await deliveriesRepo.findById(id)
   if (error || !data) throw AppError.notFound('Delivery')
@@ -96,6 +97,15 @@ async function requireDeliveryAccess(
         throw AppError.forbidden('You do not have access to this delivery')
       }
     }
+  } else if (ownScoped) {
+    // Own/assigned-only scope (admin_role_permissions.scope = 'own' on
+    // 'deliveries.view') — this staff member may only access deliveries
+    // they're assigned to via delivery_assignments (already embedded on the
+    // fetched delivery record as `assignments`).
+    const assignments = (delivery.assignments as Array<{ employee_id: string }> | undefined) ?? []
+    if (!assignments.some((a) => a.employee_id === userId)) {
+      throw AppError.forbidden('You do not have access to this delivery')
+    }
   }
 
   return delivery
@@ -109,8 +119,9 @@ export async function listDeliveries(
   userId?:     string,
   companyRole?: string | null,
   isResidential = false,
+  ownScoped    = false,
 ) {
-  const { data, count, error } = await deliveriesRepo.findAll(query, accountId, isAdmin, userId, companyRole, isResidential)
+  const { data, count, error } = await deliveriesRepo.findAll(query, accountId, isAdmin, userId, companyRole, isResidential, ownScoped)
   if (error) throw AppError.internal('Failed to fetch deliveries', error)
   return { deliveries: data ?? [], total: count ?? 0 }
 }
@@ -123,8 +134,9 @@ export async function getDelivery(
   userId?:     string,
   companyRole?: string | null,
   isResidential = false,
+  ownScoped    = false,
 ) {
-  const delivery = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, isResidential)
+  const delivery = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, isResidential, ownScoped)
   const { data: history } = await deliveriesRepo.findStatusHistory(id)
   return { ...delivery, statusHistory: history ?? [] }
 }
@@ -214,6 +226,18 @@ export async function createDelivery(
 
   if (error) throw AppError.internal('Failed to create delivery', error)
 
+  const createdLoadNumber = (data as DeliveryRow).load_number as string | undefined
+  // Always notify the submitting customer/employee themselves that their
+  // request was received — this was previously only notifying company
+  // admins and platform leadership, never the person who actually submitted it.
+  notifyUser(
+    createdBy,
+    'shipment_created',
+    'Delivery request received',
+    `Your delivery ${createdLoadNumber ?? (data as DeliveryRow).shipment_id} has been received and is being processed.`,
+    (data as DeliveryRow).shipment_id as string,
+  )
+
   // A company already attached at creation time (admin picked the corporate
   // customer this delivery is for) — notify that company right away.
   if (resolvedAccountId) {
@@ -251,8 +275,9 @@ export async function updateDelivery(
   accountId?:  string | null,
   userId?:     string,
   companyRole?: string | null,
+  ownScoped    = false,
 ) {
-  await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole)
+  await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, false, ownScoped)
 
   // Corporates cannot touch financial or actual-event fields.
   if (!isAdmin) {
@@ -327,8 +352,9 @@ export async function updateStatus(
   isAdmin:     boolean,
   accountId?:  string | null,
   companyRole?: string | null,
+  ownScoped    = false,
 ) {
-  const delivery      = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole)
+  const delivery      = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, false, ownScoped)
   const currentStatus = delivery.status as string
 
   assertTransition(currentStatus, dto.status)
@@ -373,12 +399,14 @@ export async function updateStatus(
   const creatorId  = delivery.created_by as string
   const loadNumber = (delivery.load_number as string | undefined) ?? id
 
-  const STATUS_MESSAGES: Partial<Record<string, { type: 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled'; title: string; corporateBody: string; adminBody: string }>> = {
-    picked_up:         { type: 'shipment_picked_up',         title: 'Delivery picked up',   corporateBody: 'Your delivery has been picked up.',   adminBody: `Delivery ${loadNumber} was marked picked up.` },
-    in_transit:        { type: 'shipment_in_transit',        title: 'Delivery in transit',  corporateBody: 'Your delivery is now in transit.',    adminBody: `Delivery ${loadNumber} is now in transit.` },
-    out_for_delivery:  { type: 'shipment_out_for_delivery',  title: 'Out for delivery',      corporateBody: 'Your delivery is out for delivery.',  adminBody: `Delivery ${loadNumber} is out for delivery.` },
-    delivered:         { type: 'shipment_delivered',         title: 'Delivery delivered',   corporateBody: 'Your delivery has been delivered.',   adminBody: `Delivery ${loadNumber} has been delivered.` },
-    cancelled:         { type: 'shipment_cancelled',         title: 'Delivery cancelled',   corporateBody: 'Your delivery has been cancelled.',   adminBody: `Delivery ${loadNumber} was cancelled.` },
+  const STATUS_MESSAGES: Partial<Record<string, { type: 'shipment_confirmed' | 'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled'; title: string; corporateBody: string; adminBody: string; driverTitle: string; driverBody: string }>> = {
+    confirmed:         { type: 'shipment_confirmed',         title: 'Delivery request confirmed', corporateBody: 'Your delivery is being reviewed and processed.', adminBody: `Delivery ${loadNumber} was confirmed.`, driverTitle: 'Delivery confirmed', driverBody: `Delivery ${loadNumber} was confirmed — view pickup/dropoff details.` },
+    assigned:          { type: 'shipment_assigned',          title: 'Driver assigned',      corporateBody: 'A driver has been assigned to your delivery.', adminBody: `Delivery ${loadNumber} was assigned to a driver.`, driverTitle: 'Delivery assigned to you', driverBody: `Delivery ${loadNumber} was assigned to you — view pickup/dropoff details.` },
+    picked_up:         { type: 'shipment_picked_up',         title: 'Delivery picked up',   corporateBody: 'Your delivery has been picked up.',   adminBody: `Delivery ${loadNumber} was marked picked up.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to picked up — view pickup/dropoff details.` },
+    in_transit:        { type: 'shipment_in_transit',        title: 'Delivery in transit',  corporateBody: 'Your delivery is now in transit.',    adminBody: `Delivery ${loadNumber} is now in transit.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to in transit — view pickup/dropoff details.` },
+    out_for_delivery:  { type: 'shipment_out_for_delivery',  title: 'Out for delivery',      corporateBody: 'Your delivery is out for delivery.',  adminBody: `Delivery ${loadNumber} is out for delivery.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to out for delivery — view pickup/dropoff details.` },
+    delivered:         { type: 'shipment_delivered',         title: 'Delivery delivered',   corporateBody: 'Your delivery has been delivered.',   adminBody: `Delivery ${loadNumber} has been delivered.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to delivered — view pickup/dropoff details.` },
+    cancelled:         { type: 'shipment_cancelled',         title: 'Delivery cancelled',   corporateBody: 'Your delivery has been cancelled.',   adminBody: `Delivery ${loadNumber} was cancelled.`, driverTitle: 'Delivery cancelled', driverBody: `Delivery ${loadNumber} was cancelled.` },
   }
 
   const statusMsg = STATUS_MESSAGES[dto.status]
@@ -390,6 +418,15 @@ export async function updateStatus(
     // admin made — excludeUserId just skips notifying that same admin
     // about their own action, not the whole admin audience.
     void notificationsService.notifyAllAdmins(statusMsg.type, statusMsg.title, statusMsg.adminBody, 'delivery', id, userId)
+
+    // Notify every employee assigned to this delivery too, not just the
+    // customer — driver-appropriate copy, same underlying type.
+    const assignedEmployees = ((data as DeliveryRow).assignments as Array<{ employee_id: string }> | undefined) ?? []
+    for (const assignment of assignedEmployees) {
+      if (assignment.employee_id !== userId) {
+        notifyUser(assignment.employee_id, statusMsg.type, statusMsg.driverTitle, statusMsg.driverBody, id)
+      }
+    }
   }
 
   return data
@@ -412,6 +449,20 @@ export async function updateEta(id: string, dto: UpdateEtaDto, updatedBy: string
     notifyUser(creatorId, 'shipment_eta_updated', 'Delivery ETA updated', `The estimated delivery date for ${loadNumber} was updated.`, id)
   }
   void notificationsService.notifyAllAdmins('shipment_eta_updated', 'Delivery ETA updated', `ETA for delivery ${loadNumber} was updated.`, 'delivery', id, updatedBy)
+
+  // Notify every employee assigned to this delivery too, not just the customer.
+  const assignedEmployees = ((data as DeliveryRow).assignments as Array<{ employee_id: string }> | undefined) ?? []
+  for (const assignment of assignedEmployees) {
+    if (assignment.employee_id !== updatedBy) {
+      notifyUser(
+        assignment.employee_id,
+        'shipment_eta_updated',
+        'Delivery ETA updated',
+        `The estimated delivery date for ${loadNumber} was updated — view pickup/dropoff details.`,
+        id,
+      )
+    }
+  }
 
   return data
 }
@@ -461,6 +512,21 @@ export async function assignEmployees(deliveryId: string, dto: AssignEmployeesDt
     notifyUser(employeeId, 'shipment_assigned', 'Delivery assigned to you', 'A delivery has been assigned to you.', deliveryId)
   }
 
+  const existing  = raw as DeliveryRow
+  const loadNumber = (existing.load_number as string | undefined) ?? deliveryId
+  const creatorId  = existing.created_by as string | undefined
+  if (creatorId && creatorId !== assignedBy) {
+    notifyUser(creatorId, 'shipment_assigned', 'Driver assigned', `A driver has been assigned to your delivery ${loadNumber}.`, deliveryId)
+  }
+  void notificationsService.notifyAllAdmins(
+    'shipment_assigned',
+    'Delivery assigned',
+    `Delivery ${loadNumber} was assigned to ${dto.employeeIds.length} employee(s).`,
+    'delivery',
+    deliveryId,
+    assignedBy,
+  )
+
   const { data } = await deliveriesRepo.findById(deliveryId)
   return data
 }
@@ -473,8 +539,9 @@ export async function deleteDelivery(
   isAdmin:     boolean,
   accountId?:  string | null,
   companyRole?: string | null,
+  ownScoped    = false,
 ) {
-  const delivery      = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole)
+  const delivery      = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, false, ownScoped)
   const currentStatus = delivery.status as DeliveryStatus
 
   if (!DELETABLE_STATUSES.includes(currentStatus)) {

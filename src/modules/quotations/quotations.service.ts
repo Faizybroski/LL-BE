@@ -44,6 +44,7 @@ export async function listQuotations(
   callerRole: string,
   callerId: string,
   callerAccountId?: string | null,
+  ownScopedKeys?: string[],
 ) {
   const accountId    = callerRole === 'corporate' ? (callerAccountId ?? undefined) : undefined
   // Residential customers only ever see their own quotations (profile_id match) —
@@ -51,9 +52,13 @@ export async function listQuotations(
   // company's quotations system-wide (see [[customer_types]] "grep every module
   // for callerRole === 'corporate'" lesson — this module had the exact gap).
   const profileId     = callerRole === 'residential' ? callerId : undefined
+  // Own/assigned-only scope (admin_role_permissions.scope = 'own' on
+  // 'quotations.view') — restricts an admin to quotations linked to
+  // deliveries assigned to them (standalone quotations stay visible to all).
+  const employeeId = callerRole === 'admin' && ownScopedKeys?.includes('quotations.view') ? callerId : undefined
   // Customers never see internal drafts — only quotations that have been issued to them.
   const excludeDraft = callerRole === 'corporate' || callerRole === 'residential'
-  const { data, count, error } = await repo.findAll(query, accountId, undefined, excludeDraft, profileId)
+  const { data, count, error } = await repo.findAll(query, accountId, employeeId, excludeDraft, profileId)
   if (error) throw AppError.internal('Failed to fetch quotations', error)
   return { quotations: data ?? [], total: count ?? 0 }
 }
@@ -62,11 +67,13 @@ export async function getQuotationStats(
   callerRole: string,
   callerId: string,
   callerAccountId?: string | null,
+  ownScopedKeys?: string[],
 ) {
   const accountId    = callerRole === 'corporate' ? (callerAccountId ?? undefined) : undefined
   const profileId     = callerRole === 'residential' ? callerId : undefined
+  const employeeId = callerRole === 'admin' && ownScopedKeys?.includes('quotations.view') ? callerId : undefined
   const excludeDraft = callerRole === 'corporate' || callerRole === 'residential'
-  return repo.getStats(accountId, undefined, excludeDraft, profileId)
+  return repo.getStats(accountId, employeeId, excludeDraft, profileId)
 }
 
 export async function getQuotation(

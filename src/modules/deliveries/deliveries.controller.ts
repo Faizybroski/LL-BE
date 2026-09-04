@@ -14,6 +14,9 @@ import type {
 
 const isAdmin = (req: Request) => req.user!.role === 'admin'
 const isResidential = (req: Request) => req.user!.role === 'residential'
+// Own/assigned-only scope (admin_role_permissions.scope = 'own' on
+// 'deliveries.view') — only meaningful for platform admins.
+const isOwnScoped = (req: Request) => isAdmin(req) && (req.user!.ownScopedKeys ?? []).includes('deliveries.view')
 
 export async function list(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -25,6 +28,7 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       req.user!.id,
       req.user!.companyRole,
       isResidential(req),
+      isOwnScoped(req),
     )
     paginated(res, deliveries, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {
@@ -41,6 +45,7 @@ export async function getOne(req: Request, res: Response, next: NextFunction): P
       req.user!.id,
       req.user!.companyRole,
       isResidential(req),
+      isOwnScoped(req),
     )
     ok(res, delivery)
   } catch (err) {
@@ -70,6 +75,7 @@ export async function update(req: Request, res: Response, next: NextFunction): P
       req.user!.accountId,
       req.user!.id,
       req.user!.companyRole,
+      isOwnScoped(req),
     )
     ok(res, delivery, 'Delivery updated')
   } catch (err) {
@@ -86,6 +92,7 @@ export async function updateStatus(req: Request, res: Response, next: NextFuncti
       isAdmin(req),
       req.user!.accountId,
       req.user!.companyRole,
+      isOwnScoped(req),
     )
     ok(res, delivery, 'Status updated')
   } catch (err) {
@@ -133,6 +140,7 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
       isAdmin(req),
       req.user!.accountId,
       req.user!.companyRole,
+      isOwnScoped(req),
     )
     noContent(res)
   } catch (err) {

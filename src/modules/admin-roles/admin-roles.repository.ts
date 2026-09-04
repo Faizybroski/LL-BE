@@ -11,25 +11,27 @@ export async function findPermissionCatalog() {
 export async function findRolePermissionMatrix() {
   return supabase
     .from('admin_role_permissions')
-    .select('admin_role, permission_key, granted')
+    .select('admin_role, permission_key, granted, scope')
 }
 
 export async function findGrant(role: string, permissionKey: string) {
   return supabase
     .from('admin_role_permissions')
-    .select('admin_role, permission_key, granted')
+    .select('admin_role, permission_key, granted, scope')
     .eq('admin_role', role)
     .eq('permission_key', permissionKey)
     .single()
 }
 
-export async function upsertGrant(role: string, permissionKey: string, granted: boolean) {
+export async function upsertGrant(role: string, permissionKey: string, granted: boolean, scope?: 'all' | 'own') {
+  const updates: Record<string, unknown> = { granted, updated_at: new Date().toISOString() }
+  if (scope !== undefined) updates.scope = scope
   return supabase
     .from('admin_role_permissions')
-    .update({ granted, updated_at: new Date().toISOString() })
+    .update(updates)
     .eq('admin_role', role)
     .eq('permission_key', permissionKey)
-    .select('admin_role, permission_key, granted')
+    .select('admin_role, permission_key, granted, scope')
     .single()
 }
 

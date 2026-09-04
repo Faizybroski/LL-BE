@@ -12,6 +12,7 @@ export async function list(req: Request, res: Response, next: NextFunction): Pro
       req.user!.role,
       req.user!.id,
       req.user!.accountId,
+      req.user!.ownScopedKeys,
     )
     paginated(res, invoices, { page, limit, total, totalPages: Math.ceil(total / limit) })
   } catch (err) {
