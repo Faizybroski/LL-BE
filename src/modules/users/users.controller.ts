@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import * as usersService from './users.service'
+import { AppError } from '../../lib/errors'
 import { ok, paginated, parsePagination } from '../../lib/response'
 import { param } from '../../lib/params'
 import type { UpdateProfileDto, ListUsersQuery, UpdateUserRoleDto, ApproveUserDto } from './users.schema'
@@ -26,6 +27,41 @@ export async function getById(req: Request, res: Response, next: NextFunction): 
   try {
     const profile = await usersService.getProfile(param(req, 'id'))
     ok(res, profile)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// Admin editing another user's basic profile (customers.edit) — reuses the same
+// service path as PATCH /me.
+export async function updateById(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const profile = await usersService.updateProfile(param(req, 'id'), req.body as UpdateProfileDto)
+    ok(res, profile, 'Profile updated')
+  } catch (err) {
+    next(err)
+  }
+}
+
+// Admin removing a residential customer (customers.delete).
+export async function remove(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await usersService.deleteUser(param(req, 'id'))
+    ok(res, null, 'Customer removed')
+  } catch (err) {
+    next(err)
+  }
+}
+
+// A customer closing their own account. Corporate customers must delete the
+// whole company account instead (DELETE /accounts/me).
+export async function removeMe(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (req.user!.role === 'corporate') {
+      throw AppError.badRequest('Corporate customers must delete their company account instead')
+    }
+    await usersService.deleteUser(req.user!.id)
+    ok(res, null, 'Account deleted')
   } catch (err) {
     next(err)
   }

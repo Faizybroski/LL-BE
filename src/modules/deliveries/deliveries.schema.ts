@@ -28,7 +28,9 @@ export const STATUS_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
   cancelled:        [],
 }
 
-export const DELETABLE_STATUSES: DeliveryStatus[] = ['pending', 'confirmed']
+// A delivery can be deleted in any status — delete is a soft delete plus a
+// `[DELETED]` audit row in the status history, so history is preserved.
+export const DELETABLE_STATUSES: DeliveryStatus[] = [...DELIVERY_STATUSES]
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 

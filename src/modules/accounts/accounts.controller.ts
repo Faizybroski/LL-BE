@@ -191,6 +191,24 @@ export async function getMyProfile(req: Request, res: Response, next: NextFuncti
   }
 }
 
+export async function removeMyAccount(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await accountsService.deleteOwnAccount(req.user!.id)
+    ok(res, null, 'Account deleted')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function deactivateMyAccount(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await accountsService.deactivateOwnAccount(req.user!.id)
+    ok(res, null, 'Account deactivated')
+  } catch (err) {
+    next(err)
+  }
+}
+
 export async function updateMyProfile(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const profile = await accountsService.updateOwnProfile(

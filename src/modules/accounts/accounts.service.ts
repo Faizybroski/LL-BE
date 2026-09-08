@@ -3,16 +3,21 @@ import { AppError } from '../../lib/errors'
 import * as accountsRepo from './accounts.repository'
 import * as authRepo from '../auth/auth.repository'
 import * as notificationsService from '../notifications/notifications.service'
-import type {
-  CreateAccountDto,
-  UpdateAccountDto,
-  RejectAccountDto,
-  ListAccountsQuery,
-  CreateAccountNoteDto,
-  UpdateAccountNoteDto,
-  UpdateOwnProfileDto,
-  UpdateCompanyLogoDto,
-  UpdateOwnCompanyDto,
+import { sendEmail } from '../../services/email/email.service'
+import { approvalEmail, rejectionEmail } from '../../services/email/templates/account.templates'
+import { REJECTION_REASON_META } from './rejection-reasons'
+import {
+  PORTAL_ACCESS_STATUSES,
+  type CorporatePipelineStatus,
+  type CreateAccountDto,
+  type UpdateAccountDto,
+  type RejectAccountDto,
+  type ListAccountsQuery,
+  type CreateAccountNoteDto,
+  type UpdateAccountNoteDto,
+  type UpdateOwnProfileDto,
+  type UpdateCompanyLogoDto,
+  type UpdateOwnCompanyDto,
 } from './accounts.schema'
 import type { NotificationType } from '../notifications/notifications.schema'
 
@@ -73,6 +78,23 @@ function notifyUser(userId: string, type: NotificationType, title: string, body:
     .catch(() => undefined)
 }
 
+// Fire-and-forget customer email for an account decision (approval / rejection).
+// No provider is wired yet — email.service.ts logs only. Recipient is the
+// account's contact email captured at sign-up.
+function sendAccountEmail(
+  account: Record<string, unknown>,
+  build: (customerName: string) => { subject: string; html: string; text: string },
+): void {
+  const to = (account.contact_email as string | null)?.trim()
+  if (!to) return
+  const name =
+    (account.contact_name as string | null)?.trim() ||
+    (account.account_name as string | null)?.trim() ||
+    ''
+  const msg = build(name)
+  void sendEmail({ to, subject: msg.subject, html: msg.html, text: msg.text }).catch(() => undefined)
+}
+
 async function findCompanyAdminId(accountId: string): Promise<string | null> {
   const { data } = await supabase
     .from('profiles')
@@ -81,6 +103,32 @@ async function findCompanyAdminId(accountId: string): Promise<string | null> {
     .eq('company_role', 'company_admin')
     .maybeSingle()
   return (data?.id as string | undefined) ?? null
+}
+
+// Portal login access is derived from the pipeline stage — a company can sign in
+// only while it's being onboarded or is active. Flips is_approved + is_active on
+// every (non-deleted) login attached to the account.
+export function portalAccessFor(status: CorporatePipelineStatus): boolean {
+  return PORTAL_ACCESS_STATUSES.includes(status)
+}
+
+async function syncPortalAccess(accountId: string, status: CorporatePipelineStatus): Promise<void> {
+  const allowed = portalAccessFor(status)
+  await supabase
+    .from('profiles')
+    .update({ is_approved: allowed, is_active: allowed, updated_at: new Date().toISOString() })
+    .eq('account_id', accountId)
+    .is('deleted_at', null)
+
+  // Moving OUT of a portal-access stage (suspend → inactive, deactivate → lost,
+  // etc.) — kill live sessions so the block takes effect now, not on next
+  // token refresh. Same treatment reject already gives.
+  if (!allowed) {
+    const { data: profiles } = await accountsRepo.findProfilesForAccount(accountId)
+    for (const p of profiles ?? []) {
+      await authRepo.revokeAllUserTokens(p.id as string).catch(() => undefined)
+    }
+  }
 }
 
 // ── Admin: Accounts ───────────────────────────────────────────────────────────
@@ -120,6 +168,7 @@ export async function createAccount(dto: CreateAccountDto, createdBy: string) {
     billing_country:  dto.billingCountry,
     credit_limit:     dto.creditLimit,
     payment_terms:    dto.paymentTerms,
+    pipeline_status:  dto.pipelineStatus ?? 'prospect',
     created_by:       createdBy,
   })
 
@@ -129,6 +178,15 @@ export async function createAccount(dto: CreateAccountDto, createdBy: string) {
     }
     throw AppError.internal('Failed to create account', error)
   }
+
+  void logAccountActivity({
+    accountId:  data.account_id as string,
+    eventType:  'admin_added',
+    description: `Corporate customer added at stage "${(dto.pipelineStatus ?? 'prospect')}"`,
+    actorId:    createdBy,
+    actorLabel: await actorLabel(createdBy),
+    metadata:   { pipeline_status: dto.pipelineStatus ?? 'prospect' },
+  })
 
   void notificationsService.notifyAllAdmins(
     'account_created',
@@ -143,9 +201,13 @@ export async function createAccount(dto: CreateAccountDto, createdBy: string) {
 }
 
 export async function updateAccount(id: string, dto: UpdateAccountDto, changedBy?: string) {
-  await getAccount(id)
+  const current = await getAccount(id)
+  const prevStatus = current.pipeline_status as CorporatePipelineStatus
+  const nextStatus = dto.pipelineStatus
+  const statusChanged = nextStatus !== undefined && nextStatus !== prevStatus
 
   const updates: Record<string, unknown> = {}
+  if (statusChanged) updates.pipeline_status = nextStatus
   if (dto.accountName     !== undefined) updates.account_name     = dto.accountName
   if (dto.abn             !== undefined) updates.abn              = dto.abn
   if (dto.website         !== undefined) updates.website          = dto.website
@@ -170,21 +232,56 @@ export async function updateAccount(id: string, dto: UpdateAccountDto, changedBy
   if (dto.businessType    !== undefined) updates.business_type    = dto.businessType
   if (dto.industry        !== undefined) updates.industry         = dto.industry
 
+  if (Object.keys(updates).length === 0) return current
+
   const { data, error } = await accountsRepo.updateById(id, updates)
   if (error || !data) throw AppError.internal('Failed to update account', error)
 
   const accountName = data.account_name as string
-  void notificationsService.notifyAllAdmins('account_updated', 'Account updated', `Account "${accountName}" was updated.`, 'account', id)
-  void logAccountActivity({
-    accountId: id,
-    eventType: 'account_updated',
-    description: `Company details updated (${Object.keys(updates).length} field${Object.keys(updates).length === 1 ? '' : 's'})`,
-    actorId: changedBy ?? null,
-    actorLabel: changedBy ? await actorLabel(changedBy) : 'Administrator',
-    metadata: { fields: Object.keys(updates) },
-  })
+  const actorName = changedBy ? await actorLabel(changedBy) : 'Administrator'
+
+  // Pipeline stage change — derive portal access, log it distinctly, and tell
+  // the company when their access flips.
+  if (statusChanged && nextStatus) {
+    await syncPortalAccess(id, nextStatus)
+    void logAccountActivity({
+      accountId: id,
+      eventType: 'status_changed',
+      description: `Pipeline status: ${prevStatus} → ${nextStatus}`,
+      actorId: changedBy ?? null,
+      actorLabel: actorName,
+      metadata: { from: prevStatus, to: nextStatus },
+    })
+    const adminId = await findCompanyAdminId(id)
+    if (adminId) {
+      const gainedAccess = portalAccessFor(nextStatus)
+      const lostAccess = portalAccessFor(prevStatus) && !gainedAccess
+      if (gainedAccess) {
+        notifyUser(adminId, 'account_updated', 'Your account is now active', `Your company account "${accountName}" is active — you can sign in to the portal.`, id)
+        // Approval email — fires when the account reaches a portal-access stage
+        // (onboarding / active) from a stage that did not grant access.
+        sendAccountEmail(data as Record<string, unknown>, approvalEmail)
+      } else if (lostAccess) {
+        notifyUser(adminId, 'account_updated', 'Portal access paused', `Portal access for "${accountName}" was paused by an administrator.`, id)
+      }
+    }
+  }
+
+  const otherFields = Object.keys(updates).filter((k) => k !== 'pipeline_status')
+  if (otherFields.length > 0) {
+    void notificationsService.notifyAllAdmins('account_updated', 'Account updated', `Account "${accountName}" was updated.`, 'account', id)
+    void logAccountActivity({
+      accountId: id,
+      eventType: 'account_updated',
+      description: `Company details updated (${otherFields.length} field${otherFields.length === 1 ? '' : 's'})`,
+      actorId: changedBy ?? null,
+      actorLabel: actorName,
+      metadata: { fields: otherFields },
+    })
+  }
+
   const companyAdminId = await findCompanyAdminId(id)
-  if (companyAdminId) {
+  if (companyAdminId && otherFields.length > 0) {
     notifyUser(companyAdminId, 'account_updated', 'Your account was updated', `Your company account "${accountName}" was updated by an administrator.`, id)
   }
 
@@ -208,11 +305,36 @@ export async function deactivateAccount(id: string) {
   const { error } = await accountsRepo.softDeleteById(id)
   if (error) throw AppError.internal('Failed to deactivate account', error)
 
+  // Also deactivate the company login(s) on this account — soft-deleting the
+  // account row alone doesn't block login (auth.service checks profiles.is_active),
+  // so without this a deactivated corporate customer could still sign in.
+  await supabase
+    .from('profiles')
+    .update({ deleted_at: new Date().toISOString(), is_active: false })
+    .eq('account_id', id)
+
   void notificationsService.notifyAllAdmins('account_updated', 'Account deactivated', `Account "${account.account_name as string}" was deactivated.`, 'account', id)
   const companyAdminId = await findCompanyAdminId(id)
   if (companyAdminId) {
     notifyUser(companyAdminId, 'account_updated', 'Your account was deactivated', 'Your company account was deactivated by an administrator.', id)
   }
+}
+
+// A corporate customer closing their own company account. Same soft-delete as
+// the admin path above (account row + every login on it).
+export async function deleteOwnAccount(userId: string) {
+  const accountId = await getOwnAccountId(userId)
+  await deactivateAccount(accountId)
+}
+
+// A corporate customer marking their own account as "lost" — they're leaving,
+// but the record stays visible in the admin pipeline (reversible) rather than
+// being hidden. Same effect an admin gets by moving the stage to 'lost'.
+// Routes through updateAccount() so syncPortalAccess + activity log + admin
+// notifications all fire.
+export async function deactivateOwnAccount(userId: string) {
+  const accountId = await getOwnAccountId(userId)
+  await updateAccount(accountId, { pipelineStatus: 'lost' }, userId)
 }
 
 // ── Admin: Account Notes ──────────────────────────────────────────────────────
@@ -427,11 +549,16 @@ export async function rejectAccount(id: string, dto: RejectAccountDto, adminId: 
   const now = new Date()
   const purgeAfter = new Date(now.getTime() + REJECTION_RETENTION_DAYS * 86_400_000)
 
+  // Canned reason label + internal note. 'other' is the one reason where the
+  // admin's typed note stands in for the canned text (schema requires it).
+  const meta = REJECTION_REASON_META[dto.reason]
+  const reviewNote = dto.reason === 'other' ? (dto.note ?? '').trim() : meta.internalNote
+
   const { data, error } = await accountsRepo.lifecycleUpdate(id, {
     rejected_at:      now.toISOString(),
     rejected_by:      adminId,
-    rejection_reason: dto.reason,
-    review_note:      dto.note ?? null,
+    rejection_reason: meta.label,
+    review_note:      reviewNote,
     reviewed_at:      now.toISOString(),
     reviewed_by:      adminId,
     purge_after:      purgeAfter.toISOString(),
@@ -454,9 +581,9 @@ export async function rejectAccount(id: string, dto: RejectAccountDto, adminId: 
   })
   await logAccountActivity({
     accountId: id, eventType: 'rejected',
-    description: `Application rejected — ${dto.reason}`,
+    description: `Application rejected — ${meta.label}`,
     actorId: adminId, actorLabel: label,
-    metadata: { reason: dto.reason, purgeAfter: purgeAfter.toISOString() },
+    metadata: { reason: dto.reason, reasonLabel: meta.label, purgeAfter: purgeAfter.toISOString() },
   })
 
   void notificationsService.notifyAllAdmins(
@@ -464,6 +591,9 @@ export async function rejectAccount(id: string, dto: RejectAccountDto, adminId: 
     `"${account.account_name}" was rejected. Data purges on ${purgeAfter.toISOString().slice(0, 10)}.`,
     'account', id, adminId,
   )
+
+  // Rejection email to the applicant — canned body per the chosen reason.
+  sendAccountEmail(account as Record<string, unknown>, (name) => rejectionEmail(meta.emailBody, name))
 
   return withDisplayIds(data as Record<string, unknown>)
 }

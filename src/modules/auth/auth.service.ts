@@ -29,6 +29,18 @@ import type { UserRole, CompanyRole, AdminRole } from '../../middleware/auth.mid
 // non-admin users (companyRole path never calls this).
 async function resolveAdminPermissions(adminRole: AdminRole): Promise<{ permissions: string[]; ownScopedKeys: string[] }> {
   if (!adminRole) return { permissions: [], ownScopedKeys: [] }
+
+  // The CEO is the platform owner/founder — full, unconditional access to every
+  // permission, always. Resolved straight from the live catalog so a
+  // newly-added permission is covered the instant it exists, with no matrix
+  // backfill required, and it can never be revoked from the Roles page (see
+  // updateRolePermission). Never scoped to "own only".
+  if (adminRole === 'ceo') {
+    const { data, error } = await supabase.from('permissions').select('key')
+    if (error || !data) return { permissions: [], ownScopedKeys: [] }
+    return { permissions: data.map((row) => row.key as string), ownScopedKeys: [] }
+  }
+
   const { data, error } = await supabase
     .from('admin_role_permissions')
     .select('permission_key, scope')
@@ -482,6 +494,8 @@ export async function register(
     .insert({
       account_name:     dto.company,
       created_by:       userId,
+      // Self-signups have reached out but aren't shipping yet — see migration 080.
+      pipeline_status:  'interested',
       business_type:    clean(dto.businessType),
       industry:         clean(dto.industry),
       abn:              clean(dto.abn),

@@ -49,3 +49,15 @@ export async function update(req: Request, res: Response, next: NextFunction): P
     next(err)
   }
 }
+
+export async function remove(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    await adminEmployeesService.deleteAdminEmployee(
+      { id: req.user!.id, permissions: req.user!.permissions },
+      param(req, 'id'),
+    )
+    ok(res, null, 'Employee removed')
+  } catch (err) {
+    next(err)
+  }
+}

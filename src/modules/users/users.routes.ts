@@ -15,6 +15,9 @@ export const usersRouter = Router()
 // ── Own profile ───────────────────────────────────────────────────────────────
 usersRouter.get('/me', authMiddleware, usersController.getMe)
 usersRouter.patch('/me', authMiddleware, validate(updateProfileSchema), usersController.updateMe)
+// Self-service account closure (residential customers). Declared before '/:id'
+// so "me" is not captured as an id param.
+usersRouter.delete('/me', authMiddleware, usersController.removeMe)
 
 // ── Avatar upload (signed-URL flow — bypasses storage RLS) ───────────────────
 usersRouter.post('/me/avatar/upload-url', authMiddleware, usersController.getAvatarUploadUrl)
@@ -40,6 +43,24 @@ usersRouter.get(
   requireRole('admin'),
   requirePermission('customers.view'),
   usersController.getById,
+)
+
+// Admin edit / delete of a residential customer's profile.
+usersRouter.patch(
+  '/:id',
+  authMiddleware,
+  requireRole('admin'),
+  requirePermission('customers.edit'),
+  validate(updateProfileSchema),
+  usersController.updateById,
+)
+
+usersRouter.delete(
+  '/:id',
+  authMiddleware,
+  requireRole('admin'),
+  requirePermission('customers.delete'),
+  usersController.remove,
 )
 
 usersRouter.patch(

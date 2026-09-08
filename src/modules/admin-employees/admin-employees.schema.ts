@@ -23,6 +23,14 @@ export const updateAdminEmployeeSchema = z.object({
   phone:     z.string().min(7).max(30).optional(),
   isActive:  z.boolean().optional(),
   adminRole: z.string().min(1).optional(),
+  // Admin-set password reset — same strength rules as create. Gated on
+  // 'employees.reset_password' in the service.
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+    .regex(/[0-9]/, 'Password must contain at least one number')
+    .optional(),
 })
 
 // ── List Employees ────────────────────────────────────────────────────────────

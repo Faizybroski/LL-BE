@@ -45,6 +45,17 @@ export async function updateAdminEmployee(id: string, updates: Record<string, un
     .single()
 }
 
+// Soft delete — the row drops out of every dashboard list (findAdminEmployees
+// filters deleted_at IS NULL) and `is_active: false` also blocks login/refresh
+// (auth.service). Reversible; history rows that reference this profile stay.
+export async function softDeleteById(id: string) {
+  return supabase
+    .from('profiles')
+    .update({ deleted_at: new Date().toISOString(), is_active: false })
+    .eq('id', id)
+    .eq('role', 'admin')
+}
+
 // Counts active CEOs other than `excludeId` — used to block demoting/deactivating
 // the last remaining CEO, which would lock everyone out of the admin panel.
 export async function countActiveCeosExcluding(excludeId: string) {

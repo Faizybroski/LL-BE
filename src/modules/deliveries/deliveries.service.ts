@@ -5,10 +5,16 @@ import type { UserRole } from '../../middleware/auth.middleware'
 import * as deliveriesRepo from './deliveries.repository'
 import * as notificationsService from '../notifications/notifications.service'
 import * as rewardsCreditService from '../rewards-credit/rewards-credit.service'
+import { sendEmail } from '../../services/email/email.service'
+import {
+  bookingReceivedEmail,
+  STATUS_EMAIL_TEMPLATES,
+  type EmailAudience,
+} from '../../services/email/templates/delivery.templates'
+import type { RenderedEmail } from '../../services/email/templates/layout'
 import {
   DELIVERY_STATUSES,
   STATUS_TRANSITIONS,
-  DELETABLE_STATUSES,
   type DeliveryStatus,
   type CreateDeliveryDto,
   type UpdateDeliveryDto,
@@ -39,6 +45,136 @@ function notifyUser(
 }
 
 type DeliveryRow = Record<string, unknown>
+
+type NotifyType = Parameters<typeof notifyUser>[1]
+
+// ── Stakeholder fan-out ───────────────────────────────────────────────────────
+// One place that resolves *everyone* who should hear about a delivery event and
+// sends each of them an in-app notification. Previously each call site only
+// notified `delivery.created_by`, so when an admin operates a delivery on a
+// customer's behalf (created_by = the admin) the residential customer
+// (customer_id) or the corporate company (account_id) received nothing — the
+// "QA shows no notification going to the customer" gap.
+//
+// Fire-and-forget: callers `void notifyDeliveryStakeholders(...)`.
+async function notifyDeliveryStakeholders(
+  delivery: DeliveryRow,
+  opts: {
+    type:          NotifyType
+    actorId:       string
+    customerTitle: string
+    customerBody:  string
+    // Copy for assigned Logical Links staff (driver/dispatcher). Falls back to
+    // the customer copy when omitted.
+    staffTitle?:   string
+    staffBody?:    string
+  },
+): Promise<void> {
+  const deliveryId = (delivery.shipment_id as string | undefined) ?? (delivery.id as string)
+  if (!deliveryId) return
+
+  const customerRecipients = new Set<string>()
+
+  const createdBy = delivery.created_by as string | undefined
+  if (createdBy) customerRecipients.add(createdBy)
+
+  const customerId = delivery.customer_id as string | undefined
+  if (customerId) customerRecipients.add(customerId)
+
+  const accountId = delivery.account_id as string | undefined
+  if (accountId) {
+    const { data: companyAdmins } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('company_role', 'company_admin')
+    for (const admin of companyAdmins ?? []) customerRecipients.add(admin.id as string)
+  }
+
+  customerRecipients.delete(opts.actorId)
+  for (const userId of customerRecipients) {
+    notifyUser(userId, opts.type, opts.customerTitle, opts.customerBody, deliveryId)
+  }
+
+  // Assigned staff — embedded on every findById() row as `assignments`.
+  const assignees = (delivery.assignments as Array<{ employee_id: string }> | undefined) ?? []
+  const staffTitle = opts.staffTitle ?? opts.customerTitle
+  const staffBody  = opts.staffBody  ?? opts.customerBody
+  for (const { employee_id } of assignees) {
+    if (employee_id !== opts.actorId && !customerRecipients.has(employee_id)) {
+      notifyUser(employee_id, opts.type, staffTitle, staffBody, deliveryId)
+    }
+  }
+}
+
+// ── Customer email fan-out ────────────────────────────────────────────────────
+// Resolves the customer-side email recipients for a delivery and sends each the
+// rendered template. No email provider is wired yet (see email.service.ts) —
+// this drives the no-op dispatcher today and a real transport later without
+// changing call sites. Fire-and-forget.
+function sendDeliveryLifecycleEmail(
+  delivery: DeliveryRow,
+  build: (args: { loadNumber: string; audience: EmailAudience }) => RenderedEmail,
+): void {
+  void (async () => {
+    const loadNumber = (delivery.load_number as string | undefined)
+      ?? (delivery.shipment_id as string | undefined)
+      ?? (delivery.id as string)
+    const recipients = await resolveDeliveryEmailRecipients(delivery)
+    for (const { email, audience } of recipients) {
+      const msg = build({ loadNumber, audience })
+      void sendEmail({ to: email, subject: msg.subject, html: msg.html, text: msg.text }).catch(() => undefined)
+    }
+  })().catch(() => undefined)
+}
+
+async function resolveDeliveryEmailRecipients(
+  delivery: DeliveryRow,
+): Promise<{ email: string; audience: EmailAudience }[]> {
+  const out: { email: string; audience: EmailAudience }[] = []
+  const seen = new Set<string>()
+
+  const push = (email: string | null | undefined, audience: EmailAudience) => {
+    if (email && !seen.has(email)) {
+      seen.add(email)
+      out.push({ email, audience })
+    }
+  }
+
+  const lookupEmail = async (userId: string): Promise<string | null> => {
+    try {
+      const { data } = await supabase.auth.admin.getUserById(userId)
+      return data.user?.email ?? null
+    } catch {
+      return null
+    }
+  }
+
+  const customerId = delivery.customer_id as string | undefined
+  if (customerId) push(await lookupEmail(customerId), 'residential')
+
+  const accountId = delivery.account_id as string | undefined
+  if (accountId) {
+    const { data: admins } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('company_role', 'company_admin')
+    for (const admin of admins ?? []) push(await lookupEmail(admin.id as string), 'corporate')
+  }
+
+  // Fallback: a delivery with neither a residential customer nor a company
+  // attached, created by a non-admin — notify the creator directly.
+  if (out.length === 0) {
+    const createdBy     = delivery.created_by as string | undefined
+    const createdByRole = delivery.created_by_role as string | undefined
+    if (createdBy && createdByRole && createdByRole !== 'admin') {
+      push(await lookupEmail(createdBy), createdByRole === 'residential' ? 'residential' : 'corporate')
+    }
+  }
+
+  return out
+}
 
 const TERMINAL_STATUSES = new Set<string>(['delivered', 'cancelled'])
 
@@ -226,33 +362,18 @@ export async function createDelivery(
 
   if (error) throw AppError.internal('Failed to create delivery', error)
 
-  const createdLoadNumber = (data as DeliveryRow).load_number as string | undefined
-  // Always notify the submitting customer/employee themselves that their
-  // request was received — this was previously only notifying company
-  // admins and platform leadership, never the person who actually submitted it.
-  notifyUser(
-    createdBy,
-    'shipment_created',
-    'Delivery request received',
-    `Your delivery ${createdLoadNumber ?? (data as DeliveryRow).shipment_id} has been received and is being processed.`,
-    (data as DeliveryRow).shipment_id as string,
-  )
+  const createdLoadNumber = (data.load_number as string | undefined) ?? (data.shipment_id as string)
 
-  // A company already attached at creation time (admin picked the corporate
-  // customer this delivery is for) — notify that company right away.
-  if (resolvedAccountId) {
-    const deliveryId = (data as DeliveryRow).shipment_id as string
-    const { data: admins } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('account_id', resolvedAccountId)
-      .eq('company_role', 'company_admin')
-      .neq('id', createdBy)
-
-    for (const admin of admins ?? []) {
-      notifyUser(admin.id, 'shipment_created', 'New delivery created', 'A new delivery has been created for your company.', deliveryId)
-    }
-  }
+  // "Booking Received" — reaches the submitter, the residential customer
+  // (customer_id) and the corporate company (account_id), whichever apply.
+  void notifyDeliveryStakeholders(data as DeliveryRow, {
+    type:          'shipment_created',
+    actorId:       createdBy,
+    customerTitle: 'Booking received',
+    customerBody:  `Your booking ${createdLoadNumber} has been received.`,
+  })
+  // Email: Booking Received (per the client's event matrix).
+  sendDeliveryLifecycleEmail(data as DeliveryRow, bookingReceivedEmail)
 
   const loadNumber = (data as DeliveryRow).load_number as string | undefined
   void notificationsService.notifyAllAdmins(
@@ -396,37 +517,97 @@ export async function updateStatus(
     }
   }
 
-  const creatorId  = delivery.created_by as string
   const loadNumber = (delivery.load_number as string | undefined) ?? id
 
-  const STATUS_MESSAGES: Partial<Record<string, { type: 'shipment_confirmed' | 'shipment_assigned' | 'shipment_picked_up' | 'shipment_in_transit' | 'shipment_out_for_delivery' | 'shipment_delivered' | 'shipment_cancelled'; title: string; corporateBody: string; adminBody: string; driverTitle: string; driverBody: string }>> = {
-    confirmed:         { type: 'shipment_confirmed',         title: 'Delivery request confirmed', corporateBody: 'Your delivery is being reviewed and processed.', adminBody: `Delivery ${loadNumber} was confirmed.`, driverTitle: 'Delivery confirmed', driverBody: `Delivery ${loadNumber} was confirmed — view pickup/dropoff details.` },
-    assigned:          { type: 'shipment_assigned',          title: 'Driver assigned',      corporateBody: 'A driver has been assigned to your delivery.', adminBody: `Delivery ${loadNumber} was assigned to a driver.`, driverTitle: 'Delivery assigned to you', driverBody: `Delivery ${loadNumber} was assigned to you — view pickup/dropoff details.` },
-    picked_up:         { type: 'shipment_picked_up',         title: 'Delivery picked up',   corporateBody: 'Your delivery has been picked up.',   adminBody: `Delivery ${loadNumber} was marked picked up.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to picked up — view pickup/dropoff details.` },
-    in_transit:        { type: 'shipment_in_transit',        title: 'Delivery in transit',  corporateBody: 'Your delivery is now in transit.',    adminBody: `Delivery ${loadNumber} is now in transit.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to in transit — view pickup/dropoff details.` },
-    out_for_delivery:  { type: 'shipment_out_for_delivery',  title: 'Out for delivery',      corporateBody: 'Your delivery is out for delivery.',  adminBody: `Delivery ${loadNumber} is out for delivery.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to out for delivery — view pickup/dropoff details.` },
-    delivered:         { type: 'shipment_delivered',         title: 'Delivery delivered',   corporateBody: 'Your delivery has been delivered.',   adminBody: `Delivery ${loadNumber} has been delivered.`, driverTitle: 'Delivery status updated', driverBody: `Delivery ${loadNumber} status updated to delivered — view pickup/dropoff details.` },
-    cancelled:         { type: 'shipment_cancelled',         title: 'Delivery cancelled',   corporateBody: 'Your delivery has been cancelled.',   adminBody: `Delivery ${loadNumber} was cancelled.`, driverTitle: 'Delivery cancelled', driverBody: `Delivery ${loadNumber} was cancelled.` },
+  // Dashboard-alert copy per status, taken from the client's spec ("Dashboard
+  // Alert" column). `customer*` reaches the customer/company + creator;
+  // `staff*` reaches assigned Logical Links staff; `adminBody` goes to
+  // leadership via notifyAllAdmins.
+  const STATUS_MESSAGES: Partial<Record<string, {
+    type: NotifyType
+    customerTitle: string
+    customerBody:  string
+    staffTitle:    string
+    staffBody:     string
+    adminBody:     string
+  }>> = {
+    confirmed: {
+      type: 'shipment_confirmed',
+      customerTitle: 'Booking confirmed',
+      customerBody:  `Your booking ${loadNumber} has been confirmed.`,
+      staffTitle:    'Delivery confirmed',
+      staffBody:     `Delivery ${loadNumber} was confirmed — view pickup/dropoff details.`,
+      adminBody:     `Delivery ${loadNumber} was confirmed.`,
+    },
+    assigned: {
+      type: 'shipment_assigned',
+      customerTitle: 'Delivery assigned',
+      customerBody:  `A driver or carrier has been assigned to ${loadNumber}.`,
+      staffTitle:    'Delivery assigned to you',
+      staffBody:     `Delivery ${loadNumber} was assigned to you — view pickup/dropoff details.`,
+      adminBody:     `Delivery ${loadNumber} was assigned to a driver.`,
+    },
+    picked_up: {
+      type: 'shipment_picked_up',
+      customerTitle: 'Shipment picked up',
+      customerBody:  `Your shipment ${loadNumber} has been picked up.`,
+      staffTitle:    'Delivery status updated',
+      staffBody:     `Delivery ${loadNumber} status updated to picked up — view pickup/dropoff details.`,
+      adminBody:     `Delivery ${loadNumber} was marked picked up.`,
+    },
+    in_transit: {
+      type: 'shipment_in_transit',
+      customerTitle: 'In transit',
+      customerBody:  `Your shipment ${loadNumber} is currently in transit.`,
+      staffTitle:    'Delivery status updated',
+      staffBody:     `Delivery ${loadNumber} status updated to in transit — view pickup/dropoff details.`,
+      adminBody:     `Delivery ${loadNumber} is now in transit.`,
+    },
+    out_for_delivery: {
+      type: 'shipment_out_for_delivery',
+      customerTitle: 'Out for delivery',
+      customerBody:  `Your delivery ${loadNumber} is on its way to the destination.`,
+      staffTitle:    'Delivery status updated',
+      staffBody:     `Delivery ${loadNumber} status updated to out for delivery — view pickup/dropoff details.`,
+      adminBody:     `Delivery ${loadNumber} is out for delivery.`,
+    },
+    delivered: {
+      type: 'shipment_delivered',
+      customerTitle: 'Delivery completed',
+      customerBody:  `Your delivery ${loadNumber} has been successfully completed.`,
+      staffTitle:    'Delivery status updated',
+      staffBody:     `Delivery ${loadNumber} status updated to delivered — view pickup/dropoff details.`,
+      adminBody:     `Delivery ${loadNumber} has been delivered.`,
+    },
+    cancelled: {
+      type: 'shipment_cancelled',
+      customerTitle: 'Booking cancelled',
+      customerBody:  `Your booking ${loadNumber} has been cancelled.`,
+      staffTitle:    'Delivery cancelled',
+      staffBody:     `Delivery ${loadNumber} was cancelled.`,
+      adminBody:     `Delivery ${loadNumber} was cancelled.`,
+    },
   }
 
   const statusMsg = STATUS_MESSAGES[dto.status]
   if (statusMsg) {
-    if (creatorId !== userId) {
-      notifyUser(creatorId, statusMsg.type, statusMsg.title, statusMsg.corporateBody, id)
-    }
-    // Leadership always hears about a status change, including ones an
-    // admin made — excludeUserId just skips notifying that same admin
-    // about their own action, not the whole admin audience.
-    void notificationsService.notifyAllAdmins(statusMsg.type, statusMsg.title, statusMsg.adminBody, 'delivery', id, userId)
+    void notifyDeliveryStakeholders(data as DeliveryRow, {
+      type:          statusMsg.type,
+      actorId:       userId,
+      customerTitle: statusMsg.customerTitle,
+      customerBody:  statusMsg.customerBody,
+      staffTitle:    statusMsg.staffTitle,
+      staffBody:     statusMsg.staffBody,
+    })
+    // Leadership always hears about a status change, including ones an admin
+    // made — excludeUserId just skips notifying that same admin about their
+    // own action, not the whole admin audience.
+    void notificationsService.notifyAllAdmins(statusMsg.type, statusMsg.customerTitle, statusMsg.adminBody, 'delivery', id, userId)
 
-    // Notify every employee assigned to this delivery too, not just the
-    // customer — driver-appropriate copy, same underlying type.
-    const assignedEmployees = ((data as DeliveryRow).assignments as Array<{ employee_id: string }> | undefined) ?? []
-    for (const assignment of assignedEmployees) {
-      if (assignment.employee_id !== userId) {
-        notifyUser(assignment.employee_id, statusMsg.type, statusMsg.driverTitle, statusMsg.driverBody, id)
-      }
-    }
+    // Email: only Picked Up / Out for Delivery / Delivered / Cancelled send
+    // mail (per the client's event matrix).
+    const emailTemplate = STATUS_EMAIL_TEMPLATES[dto.status as keyof typeof STATUS_EMAIL_TEMPLATES]
+    if (emailTemplate) sendDeliveryLifecycleEmail(data as DeliveryRow, emailTemplate)
   }
 
   return data
@@ -444,25 +625,15 @@ export async function updateEta(id: string, dto: UpdateEtaDto, updatedBy: string
   if (error || !data) throw AppError.internal('Failed to update ETA', error)
 
   const loadNumber = (data.load_number as string | undefined) ?? id
-  const creatorId  = data.created_by as string | undefined
-  if (creatorId && creatorId !== updatedBy) {
-    notifyUser(creatorId, 'shipment_eta_updated', 'Delivery ETA updated', `The estimated delivery date for ${loadNumber} was updated.`, id)
-  }
+  void notifyDeliveryStakeholders(data as DeliveryRow, {
+    type:          'shipment_eta_updated',
+    actorId:       updatedBy,
+    customerTitle: 'Delivery ETA updated',
+    customerBody:  `The estimated delivery date for ${loadNumber} was updated.`,
+    staffTitle:    'Delivery ETA updated',
+    staffBody:     `The estimated delivery date for ${loadNumber} was updated — view pickup/dropoff details.`,
+  })
   void notificationsService.notifyAllAdmins('shipment_eta_updated', 'Delivery ETA updated', `ETA for delivery ${loadNumber} was updated.`, 'delivery', id, updatedBy)
-
-  // Notify every employee assigned to this delivery too, not just the customer.
-  const assignedEmployees = ((data as DeliveryRow).assignments as Array<{ employee_id: string }> | undefined) ?? []
-  for (const assignment of assignedEmployees) {
-    if (assignment.employee_id !== updatedBy) {
-      notifyUser(
-        assignment.employee_id,
-        'shipment_eta_updated',
-        'Delivery ETA updated',
-        `The estimated delivery date for ${loadNumber} was updated — view pickup/dropoff details.`,
-        id,
-      )
-    }
-  }
 
   return data
 }
@@ -508,16 +679,28 @@ export async function assignEmployees(deliveryId: string, dto: AssignEmployeesDt
   const { error } = await deliveriesRepo.setAssignments(deliveryId, dto.employeeIds, assignedBy)
   if (error) throw AppError.internal('Failed to assign employees', error)
 
+  const existing   = raw as DeliveryRow
+  const loadNumber = (existing.load_number as string | undefined) ?? deliveryId
+
+  const newlyAssigned = new Set(dto.employeeIds)
   for (const employeeId of dto.employeeIds) {
-    notifyUser(employeeId, 'shipment_assigned', 'Delivery assigned to you', 'A delivery has been assigned to you.', deliveryId)
+    notifyUser(employeeId, 'shipment_assigned', 'Delivery assigned to you', `Delivery ${loadNumber} has been assigned to you — view pickup/dropoff details.`, deliveryId)
   }
 
-  const existing  = raw as DeliveryRow
-  const loadNumber = (existing.load_number as string | undefined) ?? deliveryId
-  const creatorId  = existing.created_by as string | undefined
-  if (creatorId && creatorId !== assignedBy) {
-    notifyUser(creatorId, 'shipment_assigned', 'Driver assigned', `A driver has been assigned to your delivery ${loadNumber}.`, deliveryId)
-  }
+  // Customer/company side + any previously-assigned staff (the just-assigned
+  // employees already got the explicit copy above, so skip them here by
+  // handing the helper the pre-update assignment set).
+  void notifyDeliveryStakeholders(
+    { ...existing, assignments: ((existing.assignments as Array<{ employee_id: string }> | undefined) ?? []).filter((a) => !newlyAssigned.has(a.employee_id)) },
+    {
+      type:          'shipment_assigned',
+      actorId:       assignedBy,
+      customerTitle: 'Delivery assigned',
+      customerBody:  `A driver or carrier has been assigned to ${loadNumber}.`,
+      staffTitle:    'Delivery status updated',
+      staffBody:     `Delivery ${loadNumber} status updated — view pickup/dropoff details.`,
+    },
+  )
   void notificationsService.notifyAllAdmins(
     'shipment_assigned',
     'Delivery assigned',
@@ -544,12 +727,8 @@ export async function deleteDelivery(
   const delivery      = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, false, ownScoped)
   const currentStatus = delivery.status as DeliveryStatus
 
-  if (!DELETABLE_STATUSES.includes(currentStatus)) {
-    throw AppError.unprocessable(
-      `Only deliveries in ${DELETABLE_STATUSES.map((s) => `'${s}'`).join(' or ')} ` +
-      `status can be deleted. Current status: '${currentStatus}'`,
-    )
-  }
+  // A delivery can be deleted in any status — this is a soft delete that also
+  // writes a `[DELETED]` audit entry to the status history, so nothing is lost.
 
   const { error } = await deliveriesRepo.softDeleteById(id)
   if (error) throw AppError.internal('Failed to delete delivery', error)
@@ -566,9 +745,15 @@ export async function deleteDelivery(
   }
 
   const loadNumber = (delivery.load_number as string | undefined) ?? id
-  const creatorId  = delivery.created_by as string | undefined
-  if (creatorId && creatorId !== userId) {
-    notifyUser(creatorId, 'shipment_deleted', 'Delivery deleted', `Delivery ${loadNumber} was deleted.`, id)
-  }
+  void notifyDeliveryStakeholders(delivery, {
+    type:          'shipment_cancelled',
+    actorId:       userId,
+    customerTitle: 'Booking cancelled',
+    customerBody:  `Your booking ${loadNumber} has been cancelled.`,
+    staffTitle:    'Delivery cancelled',
+    staffBody:     `Delivery ${loadNumber} was cancelled.`,
+  })
+  // Email: Cancelled (per the client's event matrix).
+  sendDeliveryLifecycleEmail(delivery, STATUS_EMAIL_TEMPLATES.cancelled)
   void notificationsService.notifyAllAdmins('shipment_deleted', 'Delivery deleted', `Delivery ${loadNumber} was deleted: ${dto.reason}`, 'delivery', id, userId)
 }

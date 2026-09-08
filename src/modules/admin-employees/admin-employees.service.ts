@@ -123,12 +123,53 @@ export async function updateAdminEmployee(requestingUser: RequestingUser, id: st
 
   const updates: Record<string, unknown> = {}
 
+  // An employee may always edit their own display fields (name / phone) —
+  // otherwise 'employees.edit' (an HR permission) is required. Role and
+  // active-status branches below keep their own dedicated permission gates,
+  // so self-editing can never escalate a role or un-suspend an account.
+  const isSelf = requestingUser.id === id
+
   if (dto.fullName !== undefined || dto.phone !== undefined) {
-    if (!requestingUser.permissions.includes('employees.edit')) {
+    if (!isSelf && !requestingUser.permissions.includes('employees.edit')) {
       throw AppError.forbidden('This action requires the "employees.edit" permission')
     }
     if (dto.fullName !== undefined) updates.full_name = dto.fullName
     if (dto.phone    !== undefined) updates.phone     = dto.phone
+  }
+
+  // Password reset — sets a new password on the auth user directly (no email
+  // round-trip). Dedicated permission: sensitive enough that plain
+  // 'employees.edit' shouldn't grant it. Seeded for CEO + VP only.
+  if (dto.password !== undefined) {
+    if (!requestingUser.permissions.includes('employees.reset_password')) {
+      throw AppError.forbidden('This action requires the "employees.reset_password" permission')
+    }
+    // Resetting the owner's password is a login-as-CEO vector — keep it to
+    // holders of 'employees.manage_roles' (CEO), not every reset_password grantee (VP).
+    if (existing.admin_role === 'ceo' && !isSelf && !requestingUser.permissions.includes('employees.manage_roles')) {
+      throw AppError.forbidden('Resetting a CEO password requires the "employees.manage_roles" permission')
+    }
+    const { error: pwErr } = await supabase.auth.admin.updateUserById(id, { password: dto.password })
+    if (pwErr) throw AppError.badRequest(pwErr.message)
+
+    void notificationsService.notifyAllAdmins(
+      'admin_employee_updated',
+      'Employee password reset',
+      `The password for ${(existing.full_name as string | null) ?? 'an internal employee'} was reset by an administrator.`,
+      'admin_employee',
+      id,
+      requestingUser.id,
+    )
+    if (id !== requestingUser.id) {
+      void notificationsService.createNotification({
+        userId: id,
+        type: 'admin_employee_updated',
+        title: 'Your password was reset',
+        body: 'An administrator set a new password for your account. Sign in with the new password.',
+        entityType: 'admin_employee',
+        entityId: id,
+      }).catch(() => undefined)
+    }
   }
 
   if (dto.adminRole !== undefined) {
@@ -195,4 +236,46 @@ export async function updateAdminEmployee(requestingUser: RequestingUser, id: st
 
   const { data: authUser } = await supabase.auth.admin.getUserById(id)
   return { ...data, email: authUser.user?.email ?? '' }
+}
+
+// ── Delete employee (soft) ────────────────────────────────────────────────────
+// Cleans a disabled/dead employee off the dashboard: sets deleted_at +
+// is_active=false so they vanish from every list and can no longer log in,
+// while deliveries/history that reference them stay intact.
+export async function deleteAdminEmployee(requestingUser: RequestingUser, id: string) {
+  const { data: existing, error: findErr } = await adminEmployeesRepo.findAdminEmployeeById(id)
+  if (findErr || !existing) throw AppError.notFound('Employee')
+
+  if (id === requestingUser.id) {
+    throw AppError.badRequest('You cannot delete your own account')
+  }
+  if (!requestingUser.permissions.includes('employees.delete')) {
+    throw AppError.forbidden('This action requires the "employees.delete" permission')
+  }
+  if (existing.admin_role === 'ceo') {
+    const { count } = await adminEmployeesRepo.countActiveCeosExcluding(id)
+    if (!count || count < 1) {
+      throw AppError.badRequest('At least one active CEO must remain — promote another CEO first')
+    }
+  }
+
+  const { error } = await adminEmployeesRepo.softDeleteById(id)
+  if (error) throw AppError.internal('Failed to delete employee', error)
+
+  void notificationsService.notifyAllAdmins(
+    'admin_employee_updated',
+    'Internal employee removed',
+    `${(existing.full_name as string | null) ?? 'An internal employee'} was removed from the dashboard.`,
+    'admin_employee',
+    id,
+    requestingUser.id,
+  )
+  void notificationsService.createNotification({
+    userId: id,
+    type: 'admin_employee_updated',
+    title: 'Your account was removed',
+    body: 'Your internal account was removed by an administrator.',
+    entityType: 'admin_employee',
+    entityId: id,
+  }).catch(() => undefined)
 }

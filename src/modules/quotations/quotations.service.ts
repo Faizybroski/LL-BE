@@ -6,6 +6,8 @@ import * as rewardsCreditService from '../rewards-credit/rewards-credit.service'
 import * as pricingService from '../pricing/pricing.service'
 import * as deliveriesService from '../deliveries/deliveries.service'
 import { generateAndUploadQuotationPdf } from '../../services/pdf.service'
+import { sendEmail } from '../../services/email/email.service'
+import { quoteReadyEmail } from '../../services/email/templates/delivery.templates'
 import type { UserRole } from '../../middleware/auth.middleware'
 import type { CreateDeliveryDto } from '../deliveries/deliveries.schema'
 import type {
@@ -28,6 +30,51 @@ function notifyUser(
   void notificationsService
     .createNotification({ userId, type, title, body, entityType: 'quotation', entityId })
     .catch(() => undefined)
+}
+
+// "Your Quote Is Ready" email — corporate customers only (per the client's
+// event matrix; residential quotations do not trigger this mail). No email
+// provider is wired yet, so this drives the no-op dispatcher today. Never
+// throws.
+function sendQuoteReadyEmail(quotation: {
+  id: string
+  profile_id: string
+  load_id: string | null
+  quotation_number?: unknown
+  customer_email?: unknown
+}): void {
+  void (async () => {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', quotation.profile_id)
+      .maybeSingle()
+    if (profile?.role !== 'corporate') return
+
+    let recipient = (quotation.customer_email as string | null) ?? null
+    if (!recipient) {
+      try {
+        const { data } = await supabase.auth.admin.getUserById(quotation.profile_id)
+        recipient = data.user?.email ?? null
+      } catch {
+        recipient = null
+      }
+    }
+    if (!recipient) return
+
+    let identifier = (quotation.quotation_number as string | undefined) ?? ''
+    if (quotation.load_id) {
+      const { data: load } = await supabase
+        .from('shipments')
+        .select('load_number')
+        .eq('shipment_id', quotation.load_id)
+        .maybeSingle()
+      if (load?.load_number) identifier = load.load_number as string
+    }
+
+    const msg = quoteReadyEmail({ loadNumber: identifier, audience: 'corporate' })
+    void sendEmail({ to: recipient, subject: msg.subject, html: msg.html, text: msg.text }).catch(() => undefined)
+  })().catch(() => undefined)
 }
 
 function computeTotals(items: { quantity: number; unit_price: number }[], discount: number, taxRate: number) {
@@ -173,7 +220,7 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
 
   if (dto.status === 'sent') {
     const quotationNumber = quotation.quotation_number as string
-    notifyUser(dto.profileId, 'quotation_sent', 'New quotation received', `Quotation ${quotationNumber} is ready for review.`, quotation.id)
+    notifyUser(dto.profileId, 'quotation_sent', 'Quote ready', `Your quote for ${quotationNumber} is ready for review.`, quotation.id)
     void notificationsService.notifyAllAdmins(
       'quotation_sent',
       'Quotation sent',
@@ -182,6 +229,13 @@ export async function createQuotation(dto: CreateQuotationDto, createdBy: string
       quotation.id,
       createdBy,
     )
+    sendQuoteReadyEmail({
+      id:               quotation.id as string,
+      profile_id:       dto.profileId,
+      load_id:          (quotation.load_id as string | null) ?? null,
+      quotation_number: quotation.quotation_number,
+      customer_email:   quotation.customer_email,
+    })
   }
 
   const { data: full } = await repo.findById(quotation.id)
@@ -516,7 +570,14 @@ export async function updateQuotation(
   // Only Draft → Sent is reachable here (see guard above) — Accepted/Rejected
   // notifications are fired from acceptQuotation/declineQuotation instead.
   if (dto.status === 'sent' && dto.status !== existing.status) {
-    notifyUser(existing.profile_id as string, 'quotation_sent', 'New quotation received', `Quotation ${quotationNumber} is ready for review.`, id)
+    notifyUser(existing.profile_id as string, 'quotation_sent', 'Quote ready', `Your quote for ${quotationNumber} is ready for review.`, id)
+    sendQuoteReadyEmail({
+      id:               id,
+      profile_id:       existing.profile_id as string,
+      load_id:          (existing.load_id as string | null) ?? null,
+      quotation_number: quotationNumber,
+      customer_email:   (updated.customer_email as string | null) ?? (existing.customer_email as string | null) ?? null,
+    })
   } else {
     // A non-status edit (pricing, items, addresses, etc.) — worth telling
     // the customer their quotation changed, and leadership either way.

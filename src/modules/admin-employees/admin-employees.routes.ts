@@ -42,3 +42,11 @@ adminEmployeesRouter.patch(
   validate(updateAdminEmployeeSchema),
   adminEmployeesController.update,
 )
+
+// No route-level requirePermission — deleteAdminEmployee() enforces
+// 'employees.delete', blocks self-deletion, and protects the last active CEO,
+// same self-contained pattern as PATCH /:id above.
+adminEmployeesRouter.delete(
+  '/:id',
+  adminEmployeesController.remove,
+)

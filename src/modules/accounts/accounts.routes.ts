@@ -32,6 +32,24 @@ accountsRouter.patch(
   accountsController.updateMyProfile,
 )
 
+// Corporate self-service account closure — soft-deletes the account and every
+// login on it. company_admin only (one login per account anyway).
+accountsRouter.delete(
+  '/me',
+  authMiddleware,
+  requireCompanyAdmin,
+  accountsController.removeMyAccount,
+)
+
+// Softer self-service exit: marks the account 'lost' (portal access revoked,
+// but the record stays in the admin pipeline and is reversible).
+accountsRouter.post(
+  '/me/deactivate',
+  authMiddleware,
+  requireCompanyAdmin,
+  accountsController.deactivateMyAccount,
+)
+
 accountsRouter.patch(
   '/me/logo',
   authMiddleware,

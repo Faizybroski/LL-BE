@@ -27,6 +27,7 @@ const ACCOUNT_SELECT = `
   credit_limit,
   payment_terms,
   is_active,
+  pipeline_status,
   business_type,
   industry,
   reviewed_at,
@@ -83,12 +84,14 @@ export async function findAll(query: ListAccountsQuery) {
     .range((query.page - 1) * query.limit, query.page * query.limit - 1)
     .order(sortField, { ascending })
 
-  // status: 'rejected' shows the soft-deleted rejected accounts (retention
-  // window); anything else is the normal active list.
-  if (query.status === 'rejected') {
+  // 'rejected=true' surfaces the soft-deleted rejected accounts inside their
+  // 90-day retention window; otherwise it's the live pipeline (hide deleted +
+  // hide rejected), filtered by pipeline stage.
+  if (query.rejected === 'true') {
     q = q.not('rejected_at', 'is', null)
   } else {
     q = q.is('deleted_at', null).is('rejected_at', null)
+    if (query.pipelineStatus) q = q.eq('pipeline_status', query.pipelineStatus)
   }
 
   if (query.search) {

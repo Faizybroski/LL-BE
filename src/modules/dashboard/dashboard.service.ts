@@ -93,15 +93,17 @@ export async function getDashboardStats(
     .gte('created_at', prevStart.toISOString())
     .lte('created_at', today.toISOString()) as Promise<{ data: Array<{ created_at: string }> | null; error: unknown }>
 
-  // 3. Admin-only: active corporate accounts + pending approvals
+  // 3. Admin-only: active corporate customers + companies still in the pipeline
   const corporatesPromise: Promise<{ count: number | null }> = isAdmin
-    ? (supabase.from('accounts').select('account_id', { count: 'exact', head: true }).eq('is_active', true) as any)
+    ? (supabase.from('accounts').select('account_id', { count: 'exact', head: true })
+        .is('deleted_at', null)
+        .eq('pipeline_status', 'active') as any)
     : Promise.resolve({ count: 0 })
 
   const pendingPromise: Promise<{ count: number | null }> = isAdmin
-    ? (supabase.from('profiles').select('id', { count: 'exact', head: true })
-        .eq('role', 'corporate')
-        .eq('is_approved', false) as any)
+    ? (supabase.from('accounts').select('account_id', { count: 'exact', head: true })
+        .is('deleted_at', null)
+        .in('pipeline_status', ['prospect', 'contacted', 'interested', 'onboarding']) as any)
     : Promise.resolve({ count: 0 })
 
   // Invoices still awaiting payment — unpaid, partially paid, or overdue with a balance outstanding.

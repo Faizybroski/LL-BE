@@ -2,9 +2,10 @@ import { AppError } from '../../lib/errors'
 import * as adminRolesRepo from './admin-roles.repository'
 import type { AdminRoleValue } from './admin-roles.schema'
 
-// CEO must always retain the ability to manage permissions — otherwise a
-// self-lockout would leave no one able to ever re-grant access.
-const CEO_LOCKED_PERMISSION = 'employees.manage_permissions'
+// The CEO is the platform owner/founder — it always holds every permission and
+// no one can edit its grants. Enforced here (writes) and in
+// auth.service.resolveAdminPermissions (reads resolve to the full catalog).
+const OWNER_ROLE = 'ceo'
 
 // ── Get catalog + matrix ──────────────────────────────────────────────────────
 export async function getPermissionsMatrix() {
@@ -18,13 +19,24 @@ export async function getPermissionsMatrix() {
   if (matrixErr || !matrix) throw AppError.internal('Failed to fetch role permission matrix', matrixErr)
   if (rolesErr || !roles) throw AppError.internal('Failed to fetch role list', rolesErr)
 
-  return { permissions, matrix, roles }
+  // Present the CEO column as full access regardless of what rows are stored,
+  // so the UI reflects reality (and can lock the column) even if the seed
+  // matrix ever drifts or a new permission hasn't been backfilled.
+  const matrixWithoutOwner = matrix.filter((row) => row.admin_role !== OWNER_ROLE)
+  const ownerRows = permissions.map((p) => ({
+    admin_role:     OWNER_ROLE,
+    permission_key: p.key as string,
+    granted:        true,
+    scope:          'all' as const,
+  }))
+
+  return { permissions, matrix: [...matrixWithoutOwner, ...ownerRows], roles }
 }
 
 // ── Toggle a single grant ─────────────────────────────────────────────────────
 export async function updateRolePermission(role: AdminRoleValue, permissionKey: string, granted: boolean, scope?: 'all' | 'own') {
-  if (role === 'ceo' && permissionKey === CEO_LOCKED_PERMISSION && !granted) {
-    throw AppError.badRequest('The CEO role must always retain the "Manage Permissions" permission')
+  if (role === OWNER_ROLE) {
+    throw AppError.badRequest('The CEO is the platform owner and always has every permission — its access cannot be changed.')
   }
 
   const { data: existing, error: findErr } = await adminRolesRepo.findGrant(role, permissionKey)

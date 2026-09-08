@@ -53,6 +53,26 @@ export async function updateProfile(id: string, dto: UpdateProfileDto) {
   return formatProfile(data as Record<string, unknown>, authUser.user?.email)
 }
 
+// ── Delete a residential customer (soft) ──────────────────────────────────────
+// Used both by an admin (customers.delete) removing a dead customer off the
+// dashboard and by a residential customer closing their own account. Sets
+// deleted_at + is_active=false: gone from every list, login blocked, history kept.
+export async function deleteUser(id: string) {
+  const { data: existing, error: findErr } = await usersRepo.findById(id)
+  if (findErr || !existing) throw AppError.notFound('User')
+
+  const { error } = await usersRepo.softDeleteById(id)
+  if (error) throw AppError.internal('Failed to delete user', error)
+
+  void notificationsService.notifyAllAdmins(
+    'account_updated',
+    'Customer removed',
+    `${(existing.full_name as string | null) ?? 'A residential customer'} was removed from the dashboard.`,
+    'account',
+    id,
+  )
+}
+
 // Deliberately NOT locked after first save — a customer who fat-fingers
 // their birthday needs to be able to fix it. The Rewards birthday bonus
 // this field drives is guarded on the EARN side instead (rewards-credit.
