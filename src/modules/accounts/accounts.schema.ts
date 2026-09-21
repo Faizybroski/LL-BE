@@ -54,6 +54,10 @@ export const updateAccountSchema = createAccountSchema
     businessType:   z.string().max(100).optional(),
     industry:       z.string().max(100).optional(),
     pipelineStatus: pipelineStatusSchema.optional(),
+    // CRM follow-up tracking
+    lastContactedAt:   z.string().max(30).nullable().optional(),
+    nextFollowUpAt:    z.string().max(30).nullable().optional(),
+    assignedEmployeeId: z.string().uuid().nullable().optional(),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' })

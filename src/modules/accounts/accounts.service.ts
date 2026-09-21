@@ -231,6 +231,9 @@ export async function updateAccount(id: string, dto: UpdateAccountDto, changedBy
   if (dto.isActive        !== undefined) updates.is_active        = dto.isActive
   if (dto.businessType    !== undefined) updates.business_type    = dto.businessType
   if (dto.industry        !== undefined) updates.industry         = dto.industry
+  if (dto.lastContactedAt    !== undefined) updates.last_contacted_at   = dto.lastContactedAt
+  if (dto.nextFollowUpAt     !== undefined) updates.next_follow_up_at  = dto.nextFollowUpAt
+  if (dto.assignedEmployeeId !== undefined) updates.assigned_employee_id = dto.assignedEmployeeId
 
   if (Object.keys(updates).length === 0) return current
 
@@ -267,7 +270,11 @@ export async function updateAccount(id: string, dto: UpdateAccountDto, changedBy
     }
   }
 
+  // Internal CRM fields (who's assigned, last/next contact) are admin-only —
+  // the company itself is never notified about these.
+  const INTERNAL_CRM_FIELDS = new Set(['last_contacted_at', 'next_follow_up_at', 'assigned_employee_id'])
   const otherFields = Object.keys(updates).filter((k) => k !== 'pipeline_status')
+  const customerFacingFields = otherFields.filter((k) => !INTERNAL_CRM_FIELDS.has(k))
   if (otherFields.length > 0) {
     void notificationsService.notifyAllAdmins('account_updated', 'Account updated', `Account "${accountName}" was updated.`, 'account', id)
     void logAccountActivity({
@@ -281,7 +288,7 @@ export async function updateAccount(id: string, dto: UpdateAccountDto, changedBy
   }
 
   const companyAdminId = await findCompanyAdminId(id)
-  if (companyAdminId && otherFields.length > 0) {
+  if (companyAdminId && customerFacingFields.length > 0) {
     notifyUser(companyAdminId, 'account_updated', 'Your account was updated', `Your company account "${accountName}" was updated by an administrator.`, id)
   }
 

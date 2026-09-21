@@ -1,15 +1,16 @@
+import { Resend } from 'resend'
+import { env } from '../../lib/env'
 import { logger } from '../../lib/logger'
 
 // ── Outbound email dispatcher ─────────────────────────────────────────────────
-// There is NO email provider wired yet — the transactional-email API will be
-// provided later. Until then this is a no-op that logs what *would* have been
-// sent, so the full trigger/template pipeline can be built and QA'd now and a
-// real transport dropped in at the single `TODO` seam below without touching
-// any call site.
+// Transport: Resend. When RESEND_API_KEY is configured every call is delivered
+// through Resend; when it is absent this stays a no-op that logs what *would*
+// have been sent, so the full trigger/template pipeline still works in local
+// dev and CI without a provider.
 //
-// Same convention as the module-local `notifyUser` helpers: callers invoke
-// this fire-and-forget (`void sendEmail(...).catch(() => undefined)`) so a
-// mail failure can never block or break the request that triggered it.
+// Same convention as the module-local `notifyUser` helpers: callers invoke this
+// fire-and-forget (`void sendEmail(...).catch(() => undefined)`) so a mail
+// failure can never block or break the request that triggered it.
 
 export type EmailMessage = {
   to:      string
@@ -18,16 +19,37 @@ export type EmailMessage = {
   text:    string
 }
 
+const resend = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null
+
+if (!resend) {
+  logger.warn('[email] RESEND_API_KEY not set — emails will be logged, not sent')
+}
+
 export async function sendEmail(message: EmailMessage): Promise<void> {
-  // TODO(email-provider): replace this block with the real transport call
-  // (e.g. `await provider.send({ from: SUPPORT_FROM, ...message })`). Keep the
-  // signature and the fire-and-forget contract identical.
-  logger.info('[email] would send (no provider configured)', {
+  if (!resend) {
+    logger.info('[email] would send (no provider configured)', {
+      to:      message.to,
+      subject: message.subject,
+    })
+    logger.debug('[email] body', { to: message.to, text: message.text })
+    return
+  }
+
+  const { error } = await resend.emails.send({
+    from:    env.EMAIL_FROM,
     to:      message.to,
     subject: message.subject,
-    // body intentionally logged at debug only — keeps info logs readable
+    html:    message.html,
+    text:    message.text,
   })
-  logger.debug('[email] body', { to: message.to, text: message.text })
+
+  if (error) {
+    logger.error('[email] send failed', { to: message.to, subject: message.subject, error })
+    // Surface to the fire-and-forget `.catch()` at the call site.
+    throw new Error(`Resend send failed: ${error.message}`)
+  }
+
+  logger.info('[email] sent', { to: message.to, subject: message.subject })
 }
 
 // Convenience: dispatch the same message to many recipients, each its own

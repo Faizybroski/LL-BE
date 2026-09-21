@@ -36,6 +36,7 @@
     "papaparse": "^5.5.3",
     "pdfkit": "^0.18.0",
     "qrcode": "^1.5.4",
+    "resend": "^6.27.0",
     "stripe": "^22.1.1",
     "typesense": "^3.0.6",
     "winston": "^3.19.0",

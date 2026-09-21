@@ -30,6 +30,9 @@ const ACCOUNT_SELECT = `
   pipeline_status,
   business_type,
   industry,
+  last_contacted_at,
+  next_follow_up_at,
+  assigned_employee_id,
   reviewed_at,
   reviewed_by,
   rejected_at,
@@ -42,13 +45,21 @@ const ACCOUNT_SELECT = `
   updated_at
 `
 
-// Profiles for the list view — enough to show company admin + count employees
-const ACCOUNT_LIST_PROFILES = `profiles ( id, full_name, phone, company_role, is_approved, created_at )`
+// Profiles for the list view — enough to show company admin + count employees.
+// `accounts` now has two relationships to `profiles` (profiles.account_id, and
+// the new accounts.assigned_employee_id), so PostgREST needs the FK name to
+// disambiguate which one this embed means.
+const ACCOUNT_LIST_PROFILES = `profiles!profiles_account_id_fkey ( id, full_name, phone, company_role, is_approved, created_at )`
+
+// Internal employee this corporate customer (lead) is assigned to for follow-up —
+// distinct from `profiles`, which are the company's own logins.
+const ACCOUNT_ASSIGNED_EMPLOYEE = `assigned_employee:profiles!accounts_assigned_employee_id_fkey ( id, full_name, avatar_url )`
 
 // Members are profiles belonging to this account (full detail)
 const ACCOUNT_DETAIL_SELECT = `
   ${ACCOUNT_SELECT},
-  profiles ( id, full_name, phone, role, company_role, is_active, is_approved, avatar_url, created_at )
+  profiles!profiles_account_id_fkey ( id, full_name, phone, role, company_role, is_active, is_approved, avatar_url, created_at ),
+  ${ACCOUNT_ASSIGNED_EMPLOYEE}
 `
 
 // Notes — author join is resolved in the service layer (cross-schema FK limitation)
@@ -80,7 +91,7 @@ export async function findAll(query: ListAccountsQuery) {
 
   let q = supabase
     .from('accounts')
-    .select(`${ACCOUNT_SELECT}, ${ACCOUNT_LIST_PROFILES}`, { count: 'exact' })
+    .select(`${ACCOUNT_SELECT}, ${ACCOUNT_LIST_PROFILES}, ${ACCOUNT_ASSIGNED_EMPLOYEE}`, { count: 'exact' })
     .range((query.page - 1) * query.limit, query.page * query.limit - 1)
     .order(sortField, { ascending })
 

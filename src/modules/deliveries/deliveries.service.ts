@@ -107,6 +107,10 @@ async function notifyDeliveryStakeholders(
   }
 }
 
+// Every delivery lifecycle email also goes to the company inbox as a BCC-style
+// copy, since nothing else surfaces bookings there.
+const COMPANY_NOTIFICATION_EMAIL = 'logicallinkscorp@gmail.com'
+
 // ── Customer email fan-out ────────────────────────────────────────────────────
 // Resolves the customer-side email recipients for a delivery and sends each the
 // rendered template. No email provider is wired yet (see email.service.ts) —
@@ -125,6 +129,14 @@ function sendDeliveryLifecycleEmail(
       const msg = build({ loadNumber, audience })
       void sendEmail({ to: email, subject: msg.subject, html: msg.html, text: msg.text }).catch(() => undefined)
     }
+
+    const companyMsg = build({ loadNumber, audience: 'corporate' })
+    void sendEmail({
+      to:      COMPANY_NOTIFICATION_EMAIL,
+      subject: companyMsg.subject,
+      html:    companyMsg.html,
+      text:    companyMsg.text,
+    }).catch(() => undefined)
   })().catch(() => undefined)
 }
 

@@ -35,6 +35,14 @@ const envSchema = z.object({
 
   // ── Observability ────────────────────────────────────────────────────────────
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+
+  // ── Email (Resend) ──────────────────────────────────────────────────────────
+  // When RESEND_API_KEY is unset, the dispatcher stays a no-op that only logs
+  // what it *would* have sent (see services/email/email.service.ts).
+  // EMAIL_FROM must be a verified Resend sender ("Name <you@your-domain.com>").
+  // Resend's shared sandbox address works without domain setup for testing.
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM:     z.string().default('Logical Links <onboarding@resend.dev>'),
 })
 
 const parsed = envSchema.safeParse(process.env)
