@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import { AppError } from '../lib/errors'
 import { errorResponse } from '../lib/response'
 import { logger } from '../lib/logger'
-import { env, allowedOrigins } from '../lib/env'
+import { env, isOriginAllowed } from '../lib/env'
 import {
   expandCause,
   classifyConnectionError,
@@ -59,7 +59,7 @@ export function errorMiddleware(err: Error, req: Request, res: Response, _next: 
   // and the browser will block the error body — making debugging impossible.
   if (!res.headersSent) {
     const origin = req.headers.origin as string | undefined
-    if (origin && allowedOrigins.includes(origin)) {
+    if (origin && isOriginAllowed(origin)) {
       if (!res.getHeader('Access-Control-Allow-Origin')) {
         res.setHeader('Access-Control-Allow-Origin', origin)
         res.setHeader('Access-Control-Allow-Credentials', 'true')

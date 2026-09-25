@@ -43,6 +43,7 @@ const LIST_SELECT = `
   created_by_role,
   created_at,
   updated_at,
+  archived_at,
   accounts ( account_id, account_name, account_code, logo_url ),
   profiles!created_by ( id, full_name, role, avatar_url ),
   customer:profiles!customer_id ( id, full_name, avatar_url ),
@@ -90,6 +91,7 @@ const DETAIL_SELECT = `
   created_by_role,
   created_at,
   updated_at,
+  archived_at,
   accounts ( account_id, account_name, account_code, logo_url, contact_name, contact_email ),
   profiles!created_by ( id, full_name, role, avatar_url ),
   customer:profiles!customer_id ( id, full_name, avatar_url ),
@@ -126,6 +128,10 @@ export async function findAll(
     .is('deleted_at', null)
     .range(offset, offset + query.limit - 1)
     .order(sortField, { ascending })
+
+  // Archived deliveries are hidden from every workspace view except the
+  // dedicated "Archived" one — mirrors the deleted_at soft-delete filter above.
+  q = query.archived ? q.not('archived_at', 'is', null) : q.is('archived_at', null)
 
   // ── RBAC scoping ──────────────────────────────────────────────────────────
   if (!isAdmin) {
@@ -208,6 +214,22 @@ export async function softDeleteById(id: string) {
   return supabase
     .from('shipments')
     .update({ deleted_at: new Date().toISOString() })
+    .eq('shipment_id', id)
+    .is('deleted_at', null)
+}
+
+export async function archiveById(id: string) {
+  return supabase
+    .from('shipments')
+    .update({ archived_at: new Date().toISOString() })
+    .eq('shipment_id', id)
+    .is('deleted_at', null)
+}
+
+export async function unarchiveById(id: string) {
+  return supabase
+    .from('shipments')
+    .update({ archived_at: null })
     .eq('shipment_id', id)
     .is('deleted_at', null)
 }

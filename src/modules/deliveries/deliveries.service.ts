@@ -21,6 +21,7 @@ import {
   type UpdateDeliveryStatusDto,
   type UpdateEtaDto,
   type DeleteDeliveryDto,
+  type ArchiveDeliveryDto,
   type AssignEmployeesDto,
   type ListDeliveriesQuery,
 } from './deliveries.schema'
@@ -768,4 +769,66 @@ export async function deleteDelivery(
   // Email: Cancelled (per the client's event matrix).
   sendDeliveryLifecycleEmail(delivery, STATUS_EMAIL_TEMPLATES.cancelled)
   void notificationsService.notifyAllAdmins('shipment_deleted', 'Delivery deleted', `Delivery ${loadNumber} was deleted: ${dto.reason}`, 'delivery', id, userId)
+}
+
+// ── Archive ───────────────────────────────────────────────────────────────────
+// Archiving is a reversible filing action (unlike delete) — it only moves a
+// delivery out of the day-to-day workspace views into "Archived Deliveries".
+// Only deliveries already in a terminal state (delivered/cancelled) may be
+// archived; there's nothing to file away on a delivery still in progress.
+export async function archiveDelivery(
+  id:          string,
+  dto:         ArchiveDeliveryDto,
+  userId:      string,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  companyRole?: string | null,
+  ownScoped    = false,
+) {
+  const delivery = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, false, ownScoped)
+  const currentStatus = delivery.status as string
+
+  if (!TERMINAL_STATUSES.has(currentStatus)) {
+    throw AppError.unprocessable(`Only completed or cancelled deliveries can be archived (current status: '${currentStatus}')`)
+  }
+
+  const { error } = await deliveriesRepo.archiveById(id)
+  if (error) throw AppError.internal('Failed to archive delivery', error)
+
+  await deliveriesRepo.insertStatusHistoryEntry({
+    deliveryId: id,
+    oldStatus:  currentStatus,
+    newStatus:  currentStatus,
+    changedBy:  userId,
+    reason:     dto.reason ? `[ARCHIVED] ${dto.reason}` : '[ARCHIVED]',
+  })
+
+  const { data } = await deliveriesRepo.findById(id)
+  return data
+}
+
+export async function unarchiveDelivery(
+  id:          string,
+  userId:      string,
+  isAdmin:     boolean,
+  accountId?:  string | null,
+  companyRole?: string | null,
+  ownScoped    = false,
+) {
+  const delivery = await requireDeliveryAccess(id, isAdmin, accountId, userId, companyRole, false, ownScoped)
+  const currentStatus = delivery.status as string
+
+  const { error } = await deliveriesRepo.unarchiveById(id)
+  if (error) throw AppError.internal('Failed to unarchive delivery', error)
+
+  await deliveriesRepo.insertStatusHistoryEntry({
+    deliveryId: id,
+    oldStatus:  currentStatus,
+    newStatus:  currentStatus,
+    changedBy:  userId,
+    reason:     '[UNARCHIVED]',
+  })
+
+  const { data } = await deliveriesRepo.findById(id)
+  return data
 }

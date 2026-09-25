@@ -114,6 +114,12 @@ export const deleteDeliverySchema = z.object({
   reason: z.string().min(3, 'Deletion reason required'),
 })
 
+// Archiving is reversible and doesn't require a reason — unlike delete, which
+// writes a permanent `[DELETED]` audit entry.
+export const archiveDeliverySchema = z.object({
+  reason: z.string().optional(),
+})
+
 export const listDeliveriesSchema = z.object({
   page:          z.coerce.number().int().positive().default(1),
   limit:         z.coerce.number().int().positive().max(100).default(20),
@@ -130,6 +136,9 @@ export const listDeliveriesSchema = z.object({
   updatedTo:     z.string().max(30).optional(),
   sortBy:        z.enum(['load_number', 'status', 'shipment_type', 'created_at', 'updated_at', 'estimated_delivery_date']).optional(),
   sortDir:       z.enum(['asc', 'desc']).optional(),
+  // When true, list only archived deliveries; omitted/false excludes them
+  // from every other workspace view (mirrors the deleted_at soft-delete filter).
+  archived:      z.coerce.boolean().optional(),
 })
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -140,4 +149,5 @@ export type UpdateDeliveryStatusDto = z.infer<typeof updateDeliveryStatusSchema>
 export type UpdateEtaDto            = z.infer<typeof updateEtaSchema>
 export type AssignEmployeesDto      = z.infer<typeof assignEmployeesSchema>
 export type DeleteDeliveryDto       = z.infer<typeof deleteDeliverySchema>
+export type ArchiveDeliveryDto      = z.infer<typeof archiveDeliverySchema>
 export type ListDeliveriesQuery      = z.infer<typeof listDeliveriesSchema>

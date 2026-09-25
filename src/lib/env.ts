@@ -11,7 +11,8 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY:         z.string().optional(),
 
   // ── CORS ────────────────────────────────────────────────────────────────────
-  // Comma-separated list: "http://localhost:3000,https://app.logicallinks.com"
+  // Comma-separated list of exact origins or `*` wildcard patterns, e.g.
+  // "http://localhost:3000,http://203.0.113.10,https://*.vercel.app,https://logicallinks.com"
   ALLOWED_ORIGINS: z.string().default('http://localhost:3000'),
 
   // ── JWT ─────────────────────────────────────────────────────────────────────
@@ -55,5 +56,23 @@ if (!parsed.success) {
 
 export const env = parsed.data
 
-// Derived convenience: ALLOWED_ORIGINS as a parsed string array
-export const allowedOrigins: string[] = env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+// Derived convenience: ALLOWED_ORIGINS as a parsed string array.
+// Trailing slashes are stripped — browsers never send them in the Origin header.
+export const allowedOrigins: string[] = env.ALLOWED_ORIGINS.split(',')
+  .map((o) => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean)
+
+// Entries containing `*` become anchored regexes; `*` matches one or more
+// host-label characters (no dots), so "https://*.vercel.app" allows preview
+// deployments but not "https://evil.com/.vercel.app".
+const exactOrigins = new Set(allowedOrigins.filter((o) => !o.includes('*')))
+const wildcardOrigins: RegExp[] = allowedOrigins
+  .filter((o) => o.includes('*'))
+  .map((o) => {
+    const escaped = o.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[a-z0-9-]+')
+    return new RegExp(`^${escaped}$`, 'i')
+  })
+
+export function isOriginAllowed(origin: string): boolean {
+  return exactOrigins.has(origin) || wildcardOrigins.some((re) => re.test(origin))
+}

@@ -8,6 +8,7 @@ import type {
   UpdateDeliveryStatusDto,
   UpdateEtaDto,
   DeleteDeliveryDto,
+  ArchiveDeliveryDto,
   AssignEmployeesDto,
   ListDeliveriesQuery,
 } from './deliveries.schema'
@@ -143,6 +144,39 @@ export async function remove(req: Request, res: Response, next: NextFunction): P
       isOwnScoped(req),
     )
     noContent(res)
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function archive(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const delivery = await deliveriesService.archiveDelivery(
+      param(req, 'id'),
+      req.body as ArchiveDeliveryDto,
+      req.user!.id,
+      isAdmin(req),
+      req.user!.accountId,
+      req.user!.companyRole,
+      isOwnScoped(req),
+    )
+    ok(res, delivery, 'Delivery archived')
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function unarchive(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const delivery = await deliveriesService.unarchiveDelivery(
+      param(req, 'id'),
+      req.user!.id,
+      isAdmin(req),
+      req.user!.accountId,
+      req.user!.companyRole,
+      isOwnScoped(req),
+    )
+    ok(res, delivery, 'Delivery unarchived')
   } catch (err) {
     next(err)
   }

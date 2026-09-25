@@ -8,6 +8,7 @@ import {
   updateDeliveryStatusSchema,
   updateEtaSchema,
   deleteDeliverySchema,
+  archiveDeliverySchema,
   assignEmployeesSchema,
   listDeliveriesSchema,
 } from './deliveries.schema'
@@ -68,6 +69,25 @@ deliveriesRouter.delete(
   requirePermission('deliveries.delete'),
   validate(deleteDeliverySchema),
   deliveriesController.remove,
+)
+
+// ── Archive (reversible — files a completed/cancelled delivery away without
+// deleting it) ────────────────────────────────────────────────────────────────
+deliveriesRouter.post(
+  '/:id/archive',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('deliveries.archive'),
+  validate(archiveDeliverySchema),
+  deliveriesController.archive,
+)
+
+deliveriesRouter.post(
+  '/:id/unarchive',
+  authMiddleware,
+  requireAdmin,
+  requirePermission('deliveries.archive'),
+  deliveriesController.unarchive,
 )
 
 // ── Status ────────────────────────────────────────────────────────────────────

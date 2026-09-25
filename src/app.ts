@@ -3,7 +3,7 @@ import cors from 'cors'
 import type { CorsOptions } from 'cors'
 import helmet from 'helmet'
 import compression from 'compression'
-import { env, allowedOrigins } from './lib/env'
+import { env, isOriginAllowed } from './lib/env'
 import { requestLogger } from './middleware/request-logger.middleware'
 import { timeoutMiddleware } from './middleware/timeout.middleware'
 import { notFoundMiddleware } from './middleware/not-found.middleware'
@@ -15,7 +15,7 @@ import { v1Router } from './routes/v1'
 export const corsOptions: CorsOptions = {
   origin(origin, callback) {
     // Allow server-to-server requests (no Origin header) and whitelisted origins.
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
+    if (!origin || isOriginAllowed(origin)) return callback(null, true)
     // Reject silently with false — no error thrown, no CORS headers set.
     // The browser will block the response; no internal error is leaked.
     callback(null, false)
