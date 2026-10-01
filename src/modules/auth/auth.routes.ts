@@ -5,6 +5,8 @@ import { validate } from '../../lib/validate'
 import {
   loginSchema,
   registerSchema,
+  googleAuthSchema,
+  googleRegisterSchema,
   refreshSchema,
   logoutSchema,
   changePasswordSchema,
@@ -20,6 +22,11 @@ export const authRouter = Router()
 // authLimiter: 20 requests / 15 min — prevents brute-force and credential stuffing.
 authRouter.post('/login',    authLimiter, validate(loginSchema),    authController.login)
 authRouter.post('/register', authLimiter, validate(registerSchema), authController.register)
+
+// Google OAuth — exchange the browser's Supabase Google session for our tokens
+// (or a sign-up token), then complete sign-up with the full form.
+authRouter.post('/google',          authLimiter, validate(googleAuthSchema),     authController.googleAuth)
+authRouter.post('/register/google', authLimiter, validate(googleRegisterSchema), authController.registerGoogle)
 
 // Refresh is unthrottled — rotation + reuse-detection (see auth.service.ts)
 // already invalidates a whole session on a stolen/replayed refresh token.

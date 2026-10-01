@@ -27,6 +27,51 @@ export const logoutSchema = z.object({
 // ── POST /auth/register ────────────────────────────────────────────────────────
 const optionalTrimmed = z.string().trim().max(200).optional().or(z.literal(''))
 
+// Everything the sign-up form collects about the customer. Shared by email
+// sign-up and Google sign-up so both require exactly the same information —
+// Google only replaces the email + password fields.
+const signupProfileFields = {
+  fullName: z.string().trim().min(2, 'Full name must be at least 2 characters').max(100),
+  // 'corporate' = company account (creates an accounts row, role='corporate');
+  // 'residential' = individual customer (no accounts row, role='residential').
+  accountType: z.enum(['corporate', 'residential']).default('corporate'),
+  company: z.string().min(2, 'Company name is required').max(200).optional(),
+  phone: z.string().trim().min(7, 'Phone number is required').max(30),
+
+  // ── Corporate company profile — captured at sign-up so the admin review
+  //    and the customer's own company page have the full picture from day
+  //    one (parity with GET /accounts/:id and /accounts/me). All optional
+  //    at the schema level; the core ones are required for corporate below.
+  businessType:         optionalTrimmed,
+  industry:             optionalTrimmed,
+  abn:                  optionalTrimmed,
+  website:              z.string().trim().url('Enter a valid URL').max(200).optional().or(z.literal('')),
+  addressLine1:         optionalTrimmed,
+  addressCity:          optionalTrimmed,
+  addressState:         optionalTrimmed,
+  addressPostcode:      z.string().trim().max(20).optional().or(z.literal('')),
+  addressCountry:       optionalTrimmed,
+  billingEmail:         z.string().trim().email('Enter a valid email').optional().or(z.literal('')),
+  accountsPayableEmail: z.string().trim().email('Enter a valid email').optional().or(z.literal('')),
+}
+
+const CORPORATE_REQUIRED: [keyof typeof signupProfileFields, string][] = [
+  ['company',         'Company name is required'],
+  ['businessType',    'Business type is required'],
+  ['industry',        'Industry is required'],
+  ['addressLine1',    'Business address is required'],
+  ['addressCity',     'City is required'],
+  ['addressState',    'State / province is required'],
+  ['addressPostcode', 'Postcode is required'],
+]
+
+function requireCorporateFields(d: Record<string, unknown>, ctx: z.RefinementCtx) {
+  if (d.accountType !== 'corporate') return
+  for (const [field, message] of CORPORATE_REQUIRED) {
+    if (!d[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [field] })
+  }
+}
+
 export const registerSchema = z
   .object({
     email: z.string().email('Invalid email address').toLowerCase(),
@@ -35,50 +80,25 @@ export const registerSchema = z
       .min(8, 'Password must be at least 8 characters')
       .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
       .regex(/[0-9]/, 'Password must contain at least one number'),
-    fullName: z.string().min(2, 'Full name must be at least 2 characters').max(100),
-    // 'corporate' = company account (creates an accounts row, role='corporate');
-    // 'residential' = individual customer (no accounts row, role='residential').
-    accountType: z.enum(['corporate', 'residential']).default('corporate'),
-    company: z.string().min(2, 'Company name is required').max(200).optional(),
-    phone: z.string().min(7).max(30).optional(),
+    ...signupProfileFields,
+  })
+  .superRefine(requireCorporateFields)
 
-    // ── Corporate company profile — captured at sign-up so the admin review
-    //    and the customer's own company page have the full picture from day
-    //    one (parity with GET /accounts/:id and /accounts/me). All optional
-    //    at the schema level; the core ones are required for corporate below.
-    businessType:         optionalTrimmed,
-    industry:             optionalTrimmed,
-    abn:                  optionalTrimmed,
-    website:              z.string().trim().url('Enter a valid URL').max(200).optional().or(z.literal('')),
-    addressLine1:         optionalTrimmed,
-    addressCity:          optionalTrimmed,
-    addressState:         optionalTrimmed,
-    addressPostcode:      z.string().trim().max(20).optional().or(z.literal('')),
-    addressCountry:       optionalTrimmed,
-    billingEmail:         z.string().trim().email('Enter a valid email').optional().or(z.literal('')),
-    accountsPayableEmail: z.string().trim().email('Enter a valid email').optional().or(z.literal('')),
+// ── POST /auth/google ──────────────────────────────────────────────────────────
+// The Supabase access token from the browser's Google OAuth session.
+export const googleAuthSchema = z.object({
+  accessToken: z.string().min(1, 'Access token is required'),
+})
+
+// ── POST /auth/register/google ─────────────────────────────────────────────────
+// Completes a Google sign-up: email comes from Google (bound to signupToken),
+// there's no password — every other sign-up field is required as usual.
+export const googleRegisterSchema = z
+  .object({
+    signupToken: z.string().min(1, 'Sign-up session is required'),
+    ...signupProfileFields,
   })
-  .refine((d) => d.accountType !== 'corporate' || !!d.company, {
-    message: 'Company name is required', path: ['company'],
-  })
-  .refine((d) => d.accountType !== 'corporate' || !!d.businessType, {
-    message: 'Business type is required', path: ['businessType'],
-  })
-  .refine((d) => d.accountType !== 'corporate' || !!d.industry, {
-    message: 'Industry is required', path: ['industry'],
-  })
-  .refine((d) => d.accountType !== 'corporate' || !!d.addressLine1, {
-    message: 'Business address is required', path: ['addressLine1'],
-  })
-  .refine((d) => d.accountType !== 'corporate' || !!d.addressCity, {
-    message: 'City is required', path: ['addressCity'],
-  })
-  .refine((d) => d.accountType !== 'corporate' || !!d.addressState, {
-    message: 'State / province is required', path: ['addressState'],
-  })
-  .refine((d) => d.accountType !== 'corporate' || !!d.addressPostcode, {
-    message: 'Postcode is required', path: ['addressPostcode'],
-  })
+  .superRefine(requireCorporateFields)
 
 // ── POST /auth/change-password ─────────────────────────────────────────────────
 export const changePasswordSchema = z
@@ -120,6 +140,8 @@ export type LoginDto = z.infer<typeof loginSchema>
 export type RefreshDto = z.infer<typeof refreshSchema>
 export type LogoutDto = z.infer<typeof logoutSchema>
 export type RegisterDto = z.infer<typeof registerSchema>
+export type GoogleAuthDto = z.infer<typeof googleAuthSchema>
+export type GoogleRegisterDto = z.infer<typeof googleRegisterSchema>
 export type ChangePasswordDto = z.infer<typeof changePasswordSchema>
 export type MfaCodeDto = z.infer<typeof mfaCodeSchema>
 export type MfaDisableDto = z.infer<typeof mfaDisableSchema>

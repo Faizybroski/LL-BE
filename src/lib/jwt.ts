@@ -83,6 +83,41 @@ export function verifyMfaChallengeToken(token: string): MfaChallengePayload {
   return payload
 }
 
+// ── OAuth sign-up token ────────────────────────────────────────────────────────
+// Issued after a Google sign-in for a user who hasn't completed the sign-up form
+// yet. Proves which auth user the form is for without granting any API access
+// (typ claim). Long enough to fill in the full corporate form.
+export interface OAuthSignupPayload {
+  sub:   string
+  email: string
+  typ:   'oauth_signup'
+  iat:   number
+  exp:   number
+}
+
+export function signOAuthSignupToken(userId: string, email: string): string {
+  return jwt.sign({ sub: userId, email, typ: 'oauth_signup' }, env.JWT_SECRET, {
+    algorithm: 'HS256',
+    expiresIn: '30m',
+  })
+}
+
+export function verifyOAuthSignupToken(token: string): OAuthSignupPayload {
+  let payload: OAuthSignupPayload
+  try {
+    payload = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as OAuthSignupPayload
+  } catch (err) {
+    if (err instanceof jwt.TokenExpiredError) {
+      throw AppError.unauthorized('Your Google sign-up session has expired — please continue with Google again')
+    }
+    throw AppError.unauthorized('Invalid sign-up session')
+  }
+  if (payload.typ !== 'oauth_signup') {
+    throw AppError.unauthorized('Invalid sign-up session')
+  }
+  return payload
+}
+
 // ── Decode without verification ───────────────────────────────────────────────
 // ONLY for extracting user ID from an expired token during refresh flows.
 // NEVER use the payload for authorization decisions.

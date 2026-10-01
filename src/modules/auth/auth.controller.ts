@@ -7,6 +7,8 @@ import type {
   RefreshDto,
   LogoutDto,
   RegisterDto,
+  GoogleAuthDto,
+  GoogleRegisterDto,
   ChangePasswordDto,
   MfaCodeDto,
   MfaDisableDto,
@@ -38,6 +40,26 @@ export async function login(req: Request, res: Response, next: NextFunction): Pr
 export async function register(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const result = await authService.register(req.body as RegisterDto, requestContext(req))
+    created(res, result, 'Account created successfully')
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── POST /api/v1/auth/google ──────────────────────────────────────────────────
+export async function googleAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.googleAuth(req.body as GoogleAuthDto, requestContext(req))
+    ok(res, result)
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ── POST /api/v1/auth/register/google ─────────────────────────────────────────
+export async function registerGoogle(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await authService.registerGoogle(req.body as GoogleRegisterDto, requestContext(req))
     created(res, result, 'Account created successfully')
   } catch (err) {
     next(err)

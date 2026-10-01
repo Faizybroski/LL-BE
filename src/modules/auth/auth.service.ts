@@ -1,7 +1,13 @@
 import { supabase, createAuthVerificationClient } from '../../services/supabase.service'
 import { AppError } from '../../lib/errors'
 import { env } from '../../lib/env'
-import { signAccessToken, signMfaChallengeToken, verifyMfaChallengeToken } from '../../lib/jwt'
+import {
+  signAccessToken,
+  signMfaChallengeToken,
+  verifyMfaChallengeToken,
+  signOAuthSignupToken,
+  verifyOAuthSignupToken,
+} from '../../lib/jwt'
 import {
   generateRefreshToken,
   hashRefreshToken,
@@ -15,11 +21,18 @@ import type {
   RefreshDto,
   LogoutDto,
   RegisterDto,
+  GoogleAuthDto,
+  GoogleRegisterDto,
   ChangePasswordDto,
   MfaCodeDto,
   MfaDisableDto,
   MfaChallengeDto,
 } from './auth.schema'
+
+// The customer details collected by the sign-up form — identical for email and
+// Google sign-ups (only how the auth user is created differs).
+type SignupProfile = Omit<RegisterDto, 'email' | 'password'>
+
 import type { UserRole, CompanyRole, AdminRole } from '../../middleware/auth.middleware'
 
 // Fetches the granted permission keys for an admin role at token-issue time,
@@ -136,7 +149,7 @@ export async function login(
   // and should not be extended with application-level attributes.
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
-    .select('role, company_role, admin_role, full_name, avatar_url, is_active, account_id, mfa_enabled')
+    .select('role, company_role, admin_role, full_name, avatar_url, is_active, account_id, mfa_enabled, signup_completed')
     .eq('id', data.user.id)
     .single()
 
@@ -147,6 +160,12 @@ export async function login(
 
   if (!profile.is_active) {
     throw AppError.forbidden('Account has been deactivated')
+  }
+
+  // A Google sign-up that never finished the sign-up form (e.g. then set a
+  // password via "forgot password") must not get a session until it does.
+  if (!profile.signup_completed) {
+    throw AppError.forbidden('Please finish creating your account — sign in with Google to complete sign-up')
   }
 
   // MFA is enabled — withhold tokens until the second factor is verified.
@@ -473,10 +492,133 @@ export async function register(
     throw AppError.badRequest(error.message)
   }
 
-  const userId = data.user!.id
+  // The auth user was created just for this request — roll it back if the
+  // rest of sign-up fails so the email can be used again.
+  return completeSignup(data.user!.id, data.user!.email!, dto, context, { rollbackAuthUser: true })
+}
+
+// ── POST /auth/google ──────────────────────────────────────────────────────────
+// Called by the OAuth callback page with the Supabase access token from the
+// browser's Google session. Existing users are logged in exactly like a
+// password login (MFA included). First-time Google users get a short-lived
+// sign-up token instead of a session — they must complete the full sign-up
+// form (POST /auth/register/google) before they can use the app.
+export async function googleAuth(
+  dto: GoogleAuthDto,
+  context: { ipAddress?: string; userAgent?: string },
+) {
+  const { data, error } = await supabase.auth.getUser(dto.accessToken)
+  if (error || !data.user) {
+    throw AppError.unauthorized('Google sign-in failed — please try again')
+  }
+
+  const authUser = data.user
+  const providers = (authUser.app_metadata?.providers as string[] | undefined) ?? [authUser.app_metadata?.provider]
+  if (!providers.includes('google')) {
+    throw AppError.unauthorized('Google sign-in failed — please try again')
+  }
+  if (!authUser.email) {
+    throw AppError.badRequest('Your Google account has no email address')
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('role, company_role, admin_role, full_name, avatar_url, is_active, account_id, mfa_enabled, signup_completed')
+    .eq('id', authUser.id)
+    .single()
+
+  if (profileError || !profile) {
+    logger.error('Profile missing for Google user', { userId: authUser.id })
+    throw AppError.internal('User profile not found', profileError)
+  }
+
+  if (!profile.is_active) {
+    throw AppError.forbidden('Account has been deactivated')
+  }
+
+  if (!profile.signup_completed) {
+    const meta = authUser.user_metadata ?? {}
+    return {
+      signupRequired: true as const,
+      signupToken:    signOAuthSignupToken(authUser.id, authUser.email),
+      email:          authUser.email,
+      fullName:       (meta.full_name ?? meta.name ?? '') as string,
+    }
+  }
+
+  if (profile.mfa_enabled) {
+    return {
+      signupRequired: false as const,
+      mfaRequired:    true as const,
+      challengeToken: signMfaChallengeToken(authUser.id),
+    }
+  }
+
+  const companyRole = (profile.company_role ?? null) as CompanyRole
+  const adminRole = (profile.admin_role ?? null) as AdminRole
+  const tokens = await issueTokenPair(authUser.id, authUser.email, profile.role as UserRole, profile.account_id, companyRole, adminRole, context)
+
+  return {
+    signupRequired: false as const,
+    mfaRequired:    false as const,
+    ...tokens,
+    user: {
+      id:          authUser.id,
+      email:       authUser.email,
+      role:        profile.role,
+      companyRole: profile.company_role ?? null,
+      adminRole:   profile.admin_role ?? null,
+      permissions: tokens.permissions,
+      fullName:    profile.full_name,
+      avatarUrl:   profile.avatar_url ?? null,
+      accountId:   profile.account_id,
+    },
+  }
+}
+
+// ── POST /auth/register/google ─────────────────────────────────────────────────
+// Second step of a first-time Google sign-in: the user submits the same sign-up
+// form as an email sign-up (minus email + password) for the auth user bound to
+// their sign-up token.
+export async function registerGoogle(
+  dto: GoogleRegisterDto,
+  context: { ipAddress?: string; userAgent?: string },
+) {
+  const { sub: userId, email } = verifyOAuthSignupToken(dto.signupToken)
+
+  const { data: profile, error } = await supabase
+    .from('profiles')
+    .select('signup_completed, is_active')
+    .eq('id', userId)
+    .single()
+
+  if (error || !profile) throw AppError.unauthorized('Invalid sign-up session')
+  if (!profile.is_active) throw AppError.forbidden('Account has been deactivated')
+  if (profile.signup_completed) {
+    throw AppError.conflict('Sign-up is already complete for this account — please sign in')
+  }
+
+  // Keep the Google user on failure (e.g. company name taken) so they can fix
+  // the form and resubmit with the same sign-up token.
+  return completeSignup(userId, email, dto, context, { rollbackAuthUser: false })
+}
+
+// ── Shared sign-up completion ─────────────────────────────────────────────────
+// Everything after the auth user exists: role/profile fields, the corporate
+// account, and the first token pair. Marks the profile signup_completed.
+async function completeSignup(
+  userId: string,
+  email: string,
+  dto: SignupProfile,
+  context: { ipAddress?: string; userAgent?: string },
+  opts: { rollbackAuthUser: boolean },
+) {
+  const rollbackAuthUser = async () => {
+    if (opts.rollbackAuthUser) await supabase.auth.admin.deleteUser(userId)
+  }
 
   if (dto.accountType === 'residential') {
-    return registerResidential(userId, data.user!.email!, dto, context)
+    return registerResidential(userId, email, dto, context, rollbackAuthUser)
   }
 
   // Empty-string fields from the form mean "not provided".
@@ -506,7 +648,7 @@ export async function register(
       address_postcode: clean(dto.addressPostcode),
       address_country:  clean(dto.addressCountry),
       contact_name:     dto.fullName,
-      contact_email:    dto.email,
+      contact_email:    email,
       contact_phone:    clean(dto.phone),
       billing_email:          clean(dto.billingEmail),
       accounts_payable_email: clean(dto.accountsPayableEmail),
@@ -528,7 +670,7 @@ export async function register(
       pgDetails,
     })
 
-    await supabase.auth.admin.deleteUser(userId)
+    await rollbackAuthUser()
 
     // Unique constraint violation — check which column/index triggered it
     if (pgCode === '23505') {
@@ -554,12 +696,16 @@ export async function register(
     throw AppError.internal('Failed to create company account — please try again or contact support', accountError)
   }
 
-  // Link the profile to the new account, set company_admin role, and persist phone
+  // Link the profile to the new account, set company_admin role, and persist
+  // the contact details from the form.
   const profileUpdates: Record<string, unknown> = {
-    account_id:   account.account_id,
-    company_role: 'company_admin',
+    role:             'corporate',
+    account_id:       account.account_id,
+    company_role:     'company_admin',
+    full_name:        dto.fullName,
+    phone:            dto.phone,
+    signup_completed: true,
   }
-  if (dto.phone) profileUpdates.phone = dto.phone
 
   const { error: profileLinkError } = await supabase.from('profiles').update(profileUpdates).eq('id', userId)
 
@@ -573,7 +719,7 @@ export async function register(
     // both orphaned: the user would be logged in with a token claiming
     // company-admin access to an account they aren't actually linked to.
     await supabase.from('accounts').delete().eq('account_id', account.account_id)
-    await supabase.auth.admin.deleteUser(userId)
+    await rollbackAuthUser()
     throw AppError.internal('Failed to complete registration — please try again', profileLinkError)
   }
 
@@ -607,7 +753,7 @@ export async function register(
   // Issue a token pair so the client can be logged in immediately after registration
   const tokens = await issueTokenPair(
     userId,
-    data.user!.email!,
+    email,
     'corporate',
     account.account_id,
     'company_admin',
@@ -619,7 +765,7 @@ export async function register(
     ...tokens,
     user: {
       id:          userId,
-      email:       data.user!.email!,
+      email,
       role:        'corporate' as const,
       companyRole: 'company_admin' as const,
       adminRole:   null,
@@ -637,11 +783,16 @@ export async function register(
 async function registerResidential(
   userId: string,
   email: string,
-  dto: RegisterDto,
+  dto: SignupProfile,
   context: { ipAddress?: string; userAgent?: string },
+  rollbackAuthUser: () => Promise<void>,
 ) {
-  const profileUpdates: Record<string, unknown> = { role: 'residential' }
-  if (dto.phone) profileUpdates.phone = dto.phone
+  const profileUpdates: Record<string, unknown> = {
+    role:             'residential',
+    full_name:        dto.fullName,
+    phone:            dto.phone,
+    signup_completed: true,
+  }
 
   const { error: profileUpdateError } = await supabase.from('profiles').update(profileUpdates).eq('id', userId)
 
@@ -650,7 +801,7 @@ async function registerResidential(
       userId,
       error: profileUpdateError.message,
     })
-    await supabase.auth.admin.deleteUser(userId)
+    await rollbackAuthUser()
     throw AppError.internal('Failed to complete registration — please try again', profileUpdateError)
   }
 
